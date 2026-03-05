@@ -101,3 +101,9 @@ data class DeviceEventRequest(
     val type: String,
     val payload: String = "{}"
 )
+
+@Serializable
+data class ApiErrorResponse(
+    val error: String? = null,
+    val status: String? = null
+)

@@ -8,28 +8,52 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
 class MdmApi(private val baseUrl: String) {
 
+//    private val client = HttpClient(CIO) {
+//        install(ContentNegotiation) {
+//            json(Json {
+//                ignoreUnknownKeys = true
+//                isLenient = true
+//            })
+//        }
+//    }
+
+    //khi backend trả 423 + {error,status}, Android đọc được để set UI state đúng.
     private val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                isLenient = true
-            })
-        }
+        expectSuccess = false
+        install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
     }
+
+
+    private suspend inline fun <reified T> HttpResponse.bodyOrThrow(): T {
+        if (status.isSuccess()) return body()
+        val err = runCatching { body<ApiErrorResponse>() }.getOrNull()
+        throw ApiException(
+            httpCode = status.value,
+            backendStatus = err?.status,
+            message = err?.error ?: "HTTP ${status.value}"
+        )
+    }
+    class ApiException(
+        val httpCode: Int,
+        val backendStatus: String? = null,
+        override val message: String
+    ) : Exception(message)
 
     // ===== AUTH =====
     suspend fun login(username: String, password: String): LoginResponse =
         client.post("$baseUrl/api/auth/login") {
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(username, password))
-        }.body()
+        }.bodyOrThrow()
 
     // ===== DEVICE =====
     suspend fun registerDevice(token: String, req: DeviceRegisterRequest): DeviceRegisterResponse =
@@ -37,20 +61,20 @@ class MdmApi(private val baseUrl: String) {
             header("Authorization", "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(req)
-        }.body()
+        }.bodyOrThrow()
 
     suspend fun unlockDevice(token: String, req: DeviceUnlockRequest): DeviceUnlockResponse =
         client.post("$baseUrl/api/device/unlock") {
             header("Authorization", "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(req)
-        }.body()
+        }.bodyOrThrow()
 
     // deviceCode bắt buộc theo backend mới
     suspend fun fetchConfig(token: String, userCode: String, deviceCode: String): DeviceConfigResponse =
         client.get("$baseUrl/api/device/config/$userCode?deviceCode=$deviceCode") {
             header("Authorization", "Bearer $token")
-        }.body()
+        }.bodyOrThrow()
 
     suspend fun updateLocation(token: String, req: LocationUpdateRequest) =
         client.post("$baseUrl/api/device/location") {

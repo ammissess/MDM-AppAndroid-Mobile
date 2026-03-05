@@ -57,6 +57,7 @@ class LauncherViewModel : ViewModel() {
                     req = buildRegisterRequest(context, deviceCode)
                 )
 
+                // Map theo status trả về từ DTO mới
                 when (registerResp.status) {
                     "LOCKED" -> {
                         _state.value = _state.value.copy(
@@ -70,15 +71,14 @@ class LauncherViewModel : ViewModel() {
                     else -> {
                         _state.value = _state.value.copy(
                             loading = false,
-                            error = "Unknown status: ${registerResp.status}"
+                            error = "Trạng thái không xác định: ${registerResp.status}"
                         )
                     }
                 }
+            } catch (e: MdmApi.ApiException) {
+                handleApiException(e)
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    error = t.message ?: "Lỗi kết nối backend"
-                )
+                _state.value = _state.value.copy(loading = false, error = t.message ?: "Lỗi kết nối")
             }
         }
     }
@@ -101,33 +101,51 @@ class LauncherViewModel : ViewModel() {
                 } else {
                     _state.value = _state.value.copy(
                         loading = false,
-                        unlockError = "Sai mật khẩu, thử lại."
+                        unlockError = "Mật khẩu không chính xác."
                     )
                 }
+            } catch (e: MdmApi.ApiException) {
+                if (e.httpCode == 423) {
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        lockState = DeviceLockState.LOCKED,
+                        unlockError = e.message // Hiển thị thông báo khóa từ server
+                    )
+                } else {
+                    _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    unlockError = t.message ?: "Lỗi unlock"
-                )
+                _state.value = _state.value.copy(loading = false, unlockError = t.message)
             }
         }
     }
 
     // ===== BƯỚC 3: Load config sau khi ACTIVE =====
     private suspend fun loadConfig(token: String, deviceCode: String, context: Context) {
-        val config = api.fetchConfig(token, userCode, deviceCode)
-        val apps = loadAllowedApps(context, config.allowedApps)
+        try {
+            val config = api.fetchConfig(token, userCode, deviceCode)
+            val apps = loadAllowedApps(context, config.allowedApps)
 
-        _state.value = LauncherUiState(
-            loading = false,
-            lockState = DeviceLockState.ACTIVE,
-            config = config,
-            apps = apps
-        )
+            _state.value = LauncherUiState(
+                loading = false,
+                lockState = DeviceLockState.ACTIVE,
+                config = config,
+                apps = apps
+            )
 
-        // Bắt đầu background jobs
-        startLocationLoop(token, deviceCode)
-        startUsageReportLoop(token, deviceCode, context)
+            startLocationLoop(token, deviceCode)
+            startUsageReportLoop(token, deviceCode, context)
+        } catch (e: MdmApi.ApiException) {
+            if (e.httpCode == 423) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    error = "Thiết bị đã bị khóa từ hệ thống."
+                )
+            } else {
+                throw e // Để catch bên ngoài xử lý
+            }
+        }
     }
 
     // ===== LOCATION LOOP: mỗi 60 giây =====
@@ -261,5 +279,18 @@ class LauncherViewModel : ViewModel() {
                     )
                 }
         } catch (_: Exception) { emptyList() }
+    }
+
+    // Helper xử lý lỗi API chung
+    private fun handleApiException(e: MdmApi.ApiException) {
+        if (e.httpCode == 423) {
+            _state.value = _state.value.copy(
+                loading = false,
+                lockState = DeviceLockState.LOCKED,
+                unlockError = e.message
+            )
+        } else {
+            _state.value = _state.value.copy(loading = false, error = e.message)
+        }
     }
 }
