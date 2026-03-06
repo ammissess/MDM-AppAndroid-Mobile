@@ -49,10 +49,45 @@ class MdmApi(private val baseUrl: String) {
     ) : Exception(message)
 
     // ===== AUTH =====
+/*
     suspend fun login(username: String, password: String): LoginResponse =
         client.post("$baseUrl/api/auth/login") {
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(username, password))
+        }.bodyOrThrow()
+*/
+
+    // ===== AUTH =====
+    suspend fun login(username: String, password: String, deviceCode: String? = null): LoginResponse =
+        client.post("$baseUrl/api/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody(LoginRequest(username, password, deviceCode))
+        }.bodyOrThrow()
+
+    // ===== USAGE (BATCH) =====
+    suspend fun reportUsageBatch(token: String, req: UsageBatchReportRequest): UsageBatchReportResponse =
+        client.post("$baseUrl/api/device/usage/batch") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+// (tuỳ chọn) bỏ reportUsage cũ hoặc giữ nhưng không dùng nữa
+// suspend fun reportUsage(...) { ... }  // backend đã bỏ /usage
+
+    // ===== COMMANDS =====
+    suspend fun pollCommands(token: String, req: DevicePollCommandsRequest): DevicePollCommandsResponse =
+        client.post("$baseUrl/api/device/poll") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun ackCommand(token: String, req: DeviceAckCommandRequest): DeviceAckCommandResponse =
+        client.post("$baseUrl/api/device/ack") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
         }.bodyOrThrow()
 
     // ===== DEVICE =====

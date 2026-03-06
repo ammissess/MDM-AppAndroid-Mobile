@@ -27,6 +27,16 @@ data class LauncherUiState(
 
 class LauncherViewModel : ViewModel() {
 
+    private var locationLoopStarted = false
+    private var usageLoopStarted = false
+    private var commandLoopStarted = false
+
+    //cờ để loop load config sau khi unlock thành công, để áp dụng policy mới ngay lập tức
+    private var configLoopStarted = false
+
+    //luu appcontext de goi loadConfig tu command loop
+    private var appContext: Context? = null
+
     private val _state = MutableStateFlow(LauncherUiState())
     val state: StateFlow<LauncherUiState> = _state
 
@@ -37,20 +47,60 @@ class LauncherViewModel : ViewModel() {
 
     private val deviceUser = "device"
     private val devicePass = "device123"
-    private val userCode = "TEST123"  // phải khớp seed backend
+    private val userCode = "TEST456"  // phải khớp seed backend
 
     private var cachedToken: String? = null
     private var cachedDeviceCode: String? = null
 
+    //Hàm syncConfig để gọi lại loadConfig sau khi unlock thành công, đảm bảo policy mới được áp dụng ngay lập tức mà không phải đợi đến lần refresh tiếp theo
+    private fun startConfigSyncLoop(token: String, deviceCode: String, context: Context) {
+        if (configLoopStarted) return
+        configLoopStarted = true
+
+        viewModelScope.launch {
+            while (true) {
+                delay(10_000L)
+                try {
+                    val config = api.fetchConfig(token, userCode, deviceCode)
+                    val apps = loadAllowedApps(context, config.allowedApps)
+
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        lockState = DeviceLockState.ACTIVE,
+                        config = config,
+                        apps = apps,
+                        error = null
+                    )
+                } catch (_: Throwable) {
+                    // giữ launcher chạy ổn định
+                }
+            }
+        }
+    }
+
     // ===== BƯỚC 1: Login + Register + Kiểm tra trạng thái =====
     fun refreshFromBackend(context: Context) {
+        appContext = context.applicationContext
         viewModelScope.launch {
             try {
-                _state.value = _state.value.copy(loading = true, error = null)
+/*                _state.value = _state.value.copy(loading = true, error = null)
 
                 val token = getOrRefreshToken()
                 val deviceCode = getDeviceCode(context)
                 cachedDeviceCode = deviceCode
+
+                val registerResp = api.registerDevice(
+                    token = token,
+                    req = buildRegisterRequest(context, deviceCode)
+                )*/
+
+                //dao thu tu lay deviceCode len truoc
+                _state.value = _state.value.copy(loading = true, error = null)
+
+                val deviceCode = getDeviceCode(context)
+                cachedDeviceCode = deviceCode
+
+                val token = getOrRefreshToken(deviceCode)
 
                 val registerResp = api.registerDevice(
                     token = token,
@@ -85,6 +135,7 @@ class LauncherViewModel : ViewModel() {
 
     // ===== BƯỚC 2: Unlock (khi user nhập mật khẩu) =====
     fun unlock(context: Context, password: String) {
+        appContext = context.applicationContext
         val deviceCode = cachedDeviceCode ?: return
         viewModelScope.launch {
             try {
@@ -121,6 +172,11 @@ class LauncherViewModel : ViewModel() {
     }
 
     // ===== BƯỚC 3: Load config sau khi ACTIVE =====
+
+    //lấy deviceCode
+    private suspend fun getOrRefreshToken(deviceCode: String): String {
+        return cachedToken ?: api.login(deviceUser, devicePass, deviceCode).token.also { cachedToken = it }
+    }
     private suspend fun loadConfig(token: String, deviceCode: String, context: Context) {
         try {
             val config = api.fetchConfig(token, userCode, deviceCode)
@@ -134,7 +190,11 @@ class LauncherViewModel : ViewModel() {
             )
 
             startLocationLoop(token, deviceCode)
+
             startUsageReportLoop(token, deviceCode, context)
+            //goi command loop sau, de dam bao chi active moi co quyen nhan lenh
+            startCommandLoop(token, deviceCode)
+            startConfigSyncLoop(token, deviceCode, context)
         } catch (e: MdmApi.ApiException) {
             if (e.httpCode == 423) {
                 _state.value = _state.value.copy(
@@ -150,6 +210,8 @@ class LauncherViewModel : ViewModel() {
 
     // ===== LOCATION LOOP: mỗi 60 giây =====
     private fun startLocationLoop(token: String, deviceCode: String) {
+        if(locationLoopStarted) return
+        locationLoopStarted = true
         viewModelScope.launch {
             while (true) {
                 try {
@@ -172,7 +234,7 @@ class LauncherViewModel : ViewModel() {
     }
 
     // ===== USAGE LOOP: mỗi 5 phút gửi batch =====
-    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
+/*    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
         viewModelScope.launch {
             while (true) {
                 delay(5 * 60_000L)
@@ -193,10 +255,119 @@ class LauncherViewModel : ViewModel() {
                             )
                         )
                     }
+                } catch (_: Throwable) { *//* silent fail *//* }
+            }
+        }
+    }*/
+
+    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
+        if (usageLoopStarted) return
+        usageLoopStarted= true
+        viewModelScope.launch {
+            while (true) {
+                delay(5 * 60_000L)
+                try {
+                    val endMs = System.currentTimeMillis()
+                    val startMs = endMs - 5 * 60_000L
+
+                    val usageList = collectAppUsage(context, startMs, endMs)
+                    if (usageList.isEmpty()) continue
+
+                    val items = usageList.map {
+                        UsageBatchReportRequest.UsageItem(
+                            packageName = it.packageName,
+                            startedAtEpochMillis = it.startMs,
+                            endedAtEpochMillis = it.endMs,
+                            durationMs = it.durationMs
+                        )
+                    }
+
+                    api.reportUsageBatch(
+                        token = token,
+                        req = UsageBatchReportRequest(deviceCode = deviceCode, items = items)
+                    )
                 } catch (_: Throwable) { /* silent fail */ }
             }
         }
     }
+
+
+
+    //====== POLL COMMANDS LOOP: mỗi 30 giây =====
+
+    private data class CommandExecResult(
+        val result: String,           // "SUCCESS" | "FAILED"
+        val error: String? = null,
+        val output: String? = null,
+    )
+
+    private fun startCommandLoop(token: String, deviceCode: String) {
+        if(commandLoopStarted) return
+        commandLoopStarted = true
+        viewModelScope.launch {
+            while (true) {
+                delay(10_000L)
+                try {
+                    val resp = api.pollCommands(token, DevicePollCommandsRequest(deviceCode, limit = 3))
+                    for (cmd in resp.commands) {
+                        val exec = executeCommand(cmd)
+                        api.ackCommand(
+                            token,
+                            DeviceAckCommandRequest(
+                                deviceCode = deviceCode,
+                                commandId = cmd.id,
+                                leaseToken = cmd.leaseToken,
+                                result = exec.result,
+                                error = exec.error,
+                                output = exec.output
+                            )
+                        )
+                    }
+                } catch (_: Throwable) { /* silent fail */ }
+            }
+        }
+    }
+
+/*
+    private fun executeCommand(cmd: DeviceLeasedCommand): CommandExecResult {
+        // MVP: chỉ ACK để thông pipeline. Về sau map type->DevicePolicyHelper
+        return when (cmd.type.uppercase()) {
+            "PING" -> CommandExecResult(result = "SUCCESS", output = "pong")
+            else -> CommandExecResult(result = "FAILED", error = "Unsupported command: ${cmd.type}")
+        }
+    }
+*/
+
+    // Có command thì sẽ loop lại refesh config, để áp dụng policy mới ngay lập tức
+    private fun executeCommand(cmd: DeviceLeasedCommand): CommandExecResult {
+        return when (cmd.type.uppercase()) {
+            "PING" -> CommandExecResult(result = "SUCCESS", output = "pong")
+
+            "REFRESH_CONFIG" -> {
+                val token = cachedToken
+                    ?: return CommandExecResult(result = "FAILED", error = "No token")
+                val deviceCode = cachedDeviceCode
+                    ?: return CommandExecResult(result = "FAILED", error = "No deviceCode")
+                val context = appContext
+                    ?: return CommandExecResult(result = "FAILED", error = "No appContext")
+
+                viewModelScope.launch {
+                    try {
+                        loadConfig(token, deviceCode, context)
+                    } catch (_: Throwable) {
+                    }
+                }
+
+                CommandExecResult(result = "SUCCESS", output = "config refresh triggered")
+            }
+
+            else -> CommandExecResult(
+                result = "FAILED",
+                error = "Unsupported command: ${cmd.type}"
+            )
+        }
+    }
+
 
     // ===== GỬI EVENT =====
     fun sendEvent(type: String, payload: String = "{}") {

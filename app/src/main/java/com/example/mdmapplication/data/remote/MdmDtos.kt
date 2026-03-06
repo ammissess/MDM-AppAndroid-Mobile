@@ -3,7 +3,11 @@ package com.example.mdmapplication.data.remote
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class LoginRequest(val username: String, val password: String)
+data class LoginRequest(
+    val username: String,
+     val password: String,
+     val deviceCode: String? = null,
+    )
 
 @Serializable
 data class LoginResponse(
@@ -11,7 +15,68 @@ data class LoginResponse(
     val expiresAtEpochMillis: Long,
     val role: String
 )
+// giữ LoginResponse như cũ
 
+@Serializable
+data class UsageBatchReportRequest(
+    val deviceCode: String,
+    val items: List<UsageItem>,
+) {
+    @Serializable
+    data class UsageItem(
+        val packageName: String,
+        val startedAtEpochMillis: Long,
+        val endedAtEpochMillis: Long,
+        val durationMs: Long,
+    )
+}
+
+@Serializable
+data class UsageBatchReportResponse(
+    val ok: Boolean,
+    val inserted: Int,
+)
+
+
+// ✅ Commands (match backend CommandDtos)
+@Serializable
+data class DevicePollCommandsRequest(
+    val deviceCode: String,
+    val limit: Int = 1,
+)
+
+@Serializable
+data class DevicePollCommandsResponse(
+    val commands: List<DeviceLeasedCommand>,
+    val serverTimeEpochMillis: Long,
+)
+
+@Serializable
+data class DeviceLeasedCommand(
+    val id: String,
+    val type: String,
+    val payload: String,
+    val status: String,
+    val leaseToken: String,
+    val leaseExpiresAtEpochMillis: Long,
+    val createdAtEpochMillis: Long,
+)
+
+@Serializable
+data class DeviceAckCommandRequest(
+    val deviceCode: String,
+    val commandId: String,
+    val leaseToken: String,
+    val result: String, // SUCCESS|FAILED
+    val error: String? = null,
+    val output: String? = null,
+)
+
+@Serializable
+data class DeviceAckCommandResponse(
+    val ok: Boolean,
+    val status: String,
+)
 /**
  * Đồng bộ theo backend DeviceRegisterRequest
  */

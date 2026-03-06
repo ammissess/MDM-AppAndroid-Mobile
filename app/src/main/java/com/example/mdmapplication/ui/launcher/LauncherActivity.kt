@@ -25,9 +25,14 @@ class LauncherActivity : ComponentActivity() {
         val policy = DevicePolicyHelper(this)
         val isDo = dpm.isDeviceOwnerApp(packageName)
 
+        //Cài DO mới mà reboot lại không vào kiosk nên comment lại
+
+//test dky DO moi
+/*
         if (isDo && BuildConfig.DEBUG) {
             policy.clearPersistentPreferredActivities()
         }
+*/
 
         // Fetch từ backend khi khởi động
         viewModel.refreshFromBackend(this)
@@ -49,7 +54,8 @@ class LauncherActivity : ComponentActivity() {
                     disableCamera = cfg.disableCamera
                 )
 
-                if (cfg.kioskMode && !BuildConfig.DEBUG) {
+                //if (cfg.kioskMode && !BuildConfig.DEBUG) { //test dky DO moi
+                if (cfg.kioskMode) {
                     try { startLockTask() } catch (_: Throwable) {}
                 }
             }

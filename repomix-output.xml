@@ -1,0 +1,2500 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gitignore
+app/.gitignore
+app/build.gradle.kts
+app/proguard-rules.pro
+app/src/androidTest/java/com/example/mdmapplication/ExampleInstrumentedTest.kt
+app/src/main/AndroidManifest.xml
+app/src/main/java/com/example/mdmapplication/data/remote/MdmApi.kt
+app/src/main/java/com/example/mdmapplication/data/remote/MdmDtos.kt
+app/src/main/java/com/example/mdmapplication/device/DevicePolicyHelper.kt
+app/src/main/java/com/example/mdmapplication/device/MyDeviceAdminReceiver.kt
+app/src/main/java/com/example/mdmapplication/MainActivity.kt
+app/src/main/java/com/example/mdmapplication/model/LauncherApp.kt
+app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherActivity.kt
+app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherScreen.kt
+app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherViewModel.kt
+app/src/main/java/com/example/mdmapplication/ui/launcher/LoadingOrErrorScreen.kt
+app/src/main/java/com/example/mdmapplication/ui/launcher/UnlockScreen.kt
+app/src/main/java/com/example/mdmapplication/ui/theme/Color.kt
+app/src/main/java/com/example/mdmapplication/ui/theme/Theme.kt
+app/src/main/java/com/example/mdmapplication/ui/theme/Type.kt
+app/src/main/java/com/example/mdmapplication/util/BatteryReader.kt
+app/src/main/res/drawable/ic_launcher_background.xml
+app/src/main/res/drawable/ic_launcher_foreground.xml
+app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+app/src/main/res/mipmap-hdpi/ic_launcher_round.webp
+app/src/main/res/mipmap-hdpi/ic_launcher.webp
+app/src/main/res/mipmap-mdpi/ic_launcher_round.webp
+app/src/main/res/mipmap-mdpi/ic_launcher.webp
+app/src/main/res/mipmap-xhdpi/ic_launcher_round.webp
+app/src/main/res/mipmap-xhdpi/ic_launcher.webp
+app/src/main/res/mipmap-xxhdpi/ic_launcher_round.webp
+app/src/main/res/mipmap-xxhdpi/ic_launcher.webp
+app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp
+app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp
+app/src/main/res/values/colors.xml
+app/src/main/res/values/strings.xml
+app/src/main/res/values/themes.xml
+app/src/main/res/xml/backup_rules.xml
+app/src/main/res/xml/data_extraction_rules.xml
+app/src/main/res/xml/device_admin.xml
+app/src/test/java/com/example/mdmapplication/ExampleUnitTest.kt
+build.gradle.kts
+gradle.properties
+gradle/libs.versions.toml
+gradle/wrapper/gradle-wrapper.jar
+gradle/wrapper/gradle-wrapper.properties
+gradlew
+gradlew.bat
+README.md
+settings.gradle.kts
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".gitignore">
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+</file>
+
+<file path="app/.gitignore">
+/build
+</file>
+
+<file path="app/proguard-rules.pro">
+# Add project specific ProGuard rules here.
+# You can control the set of applied configuration files using the
+# proguardFiles setting in build.gradle.
+#
+# For more details, see
+#   http://developer.android.com/guide/developing/tools/proguard.html
+
+# If your project uses WebView with JS, uncomment the following
+# and specify the fully qualified class name to the JavaScript interface
+# class:
+#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
+#   public *;
+#}
+
+# Uncomment this to preserve the line number information for
+# debugging stack traces.
+#-keepattributes SourceFile,LineNumberTable
+
+# If you keep the line number information, uncomment this to
+# hide the original source file name.
+#-renamesourcefileattribute SourceFile
+</file>
+
+<file path="app/src/androidTest/java/com/example/mdmapplication/ExampleInstrumentedTest.kt">
+package com.example.mdmapplication
+
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.ext.junit.runners.AndroidJUnit4
+
+import org.junit.Test
+import org.junit.runner.RunWith
+
+import org.junit.Assert.*
+
+/**
+ * Instrumented test, which will execute on an Android device.
+ *
+ * See [testing documentation](http://d.android.com/tools/testing).
+ */
+@RunWith(AndroidJUnit4::class)
+class ExampleInstrumentedTest {
+    @Test
+    fun useAppContext() {
+        // Context of the app under test.
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        assertEquals("com.example.mdmapplication", appContext.packageName)
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/device/MyDeviceAdminReceiver.kt">
+package com.example.mdmapplication.device
+
+import android.app.admin.DeviceAdminReceiver
+import android.content.Context
+import android.content.Intent
+
+class MyDeviceAdminReceiver : DeviceAdminReceiver() {
+    override fun onEnabled(context: Context, intent: Intent) {
+        super.onEnabled(context, intent)
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/MainActivity.kt">
+package com.example.mdmapplication
+
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import com.example.mdmapplication.ui.launcher.LauncherActivity
+
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        startActivity(Intent(this, LauncherActivity::class.java))
+        finish()
+    }
+}
+
+//
+//import android.os.Bundle
+//import androidx.activity.ComponentActivity
+//import androidx.activity.compose.setContent
+//import androidx.activity.enableEdgeToEdge
+//import androidx.compose.foundation.layout.fillMaxSize
+//import androidx.compose.foundation.layout.padding
+//import androidx.compose.material3.Scaffold
+//import androidx.compose.material3.Text
+//import androidx.compose.runtime.Composable
+//import androidx.compose.ui.Modifier
+//import androidx.compose.ui.tooling.preview.Preview
+//import com.example.mdmapplication.ui.theme.MDMApplicationTheme
+//
+//class MainActivity : ComponentActivity() {
+//    override fun onCreate(savedInstanceState: Bundle?) {
+//        super.onCreate(savedInstanceState)
+//        enableEdgeToEdge()
+//        setContent {
+//            MDMApplicationTheme {
+//                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+//                    Greeting(
+//                        name = "Android",
+//                        modifier = Modifier.padding(innerPadding)
+//                    )
+//                }
+//            }
+//        }
+//    }
+//}
+//
+//@Composable
+//fun Greeting(name: String, modifier: Modifier = Modifier) {
+//    Text(
+//        text = "Hello $name!",
+//        modifier = modifier
+//    )
+//}
+//
+//@Preview(showBackground = true)
+//@Composable
+//fun GreetingPreview() {
+//    MDMApplicationTheme {
+//        Greeting("Android")
+//    }
+//}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/model/LauncherApp.kt">
+package com.example.mdmapplication.model
+
+import android.graphics.drawable.Drawable
+
+data class LauncherApp(
+    val packageName: String,
+    val label: String,
+    val icon: Drawable
+)
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LoadingOrErrorScreen.kt">
+package com.example.mdmapplication.ui.launcher
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+
+@Composable
+fun LoadingOrErrorScreen(
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit
+) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp)
+        ) {
+            if (loading) {
+                CircularProgressIndicator()
+                Text("Đang kết nối MDM server...")
+            }
+
+            if (error != null) {
+                Text(
+                    text = "❌ $error",
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center
+                )
+                Button(onClick = onRetry) {
+                    Text("Thử lại")
+                }
+            }
+        }
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/UnlockScreen.kt">
+package com.example.mdmapplication.ui.launcher
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+
+@Composable
+fun UnlockScreen(
+    error: String?,
+    loading: Boolean,
+    onUnlock: (String) -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .padding(32.dp)
+                .fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "🔒 Thiết bị bị khóa",
+                    style = MaterialTheme.typography.titleLarge,
+                    textAlign = TextAlign.Center
+                )
+
+                Text(
+                    text = "Liên hệ quản trị viên để lấy mã mở khóa",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Mật khẩu mở khóa") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                    isError = error != null,
+                    supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Button(
+                    onClick = { onUnlock(password) },
+                    enabled = password.isNotBlank() && !loading,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Mở khóa")
+                    }
+                }
+            }
+        }
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/theme/Color.kt">
+package com.example.mdmapplication.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+val Purple80 = Color(0xFFD0BCFF)
+val PurpleGrey80 = Color(0xFFCCC2DC)
+val Pink80 = Color(0xFFEFB8C8)
+
+val Purple40 = Color(0xFF6650a4)
+val PurpleGrey40 = Color(0xFF625b71)
+val Pink40 = Color(0xFF7D5260)
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/theme/Theme.kt">
+package com.example.mdmapplication.ui.theme
+
+import android.app.Activity
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+
+private val DarkColorScheme = darkColorScheme(
+    primary = Purple80,
+    secondary = PurpleGrey80,
+    tertiary = Pink80
+)
+
+private val LightColorScheme = lightColorScheme(
+    primary = Purple40,
+    secondary = PurpleGrey40,
+    tertiary = Pink40
+
+    /* Other default colors to override
+    background = Color(0xFFFFFBFE),
+    surface = Color(0xFFFFFBFE),
+    onPrimary = Color.White,
+    onSecondary = Color.White,
+    onTertiary = Color.White,
+    onBackground = Color(0xFF1C1B1F),
+    onSurface = Color(0xFF1C1B1F),
+    */
+)
+
+@Composable
+fun MDMApplicationTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    // Dynamic color is available on Android 12+
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+
+        darkTheme -> DarkColorScheme
+        else -> LightColorScheme
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/theme/Type.kt">
+package com.example.mdmapplication.ui.theme
+
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+// Set of Material typography styles to start with
+val Typography = Typography(
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.5.sp
+    )
+    /* Other default text styles to override
+    titleLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        letterSpacing = 0.sp
+    ),
+    labelSmall = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.5.sp
+    )
+    */
+)
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/util/BatteryReader.kt">
+package com.example.mdmapplication.util
+
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+
+data class BatteryInfo(
+    val levelPercent: Int,
+    val isCharging: Boolean
+)
+
+fun Context.readBatteryInfo(): BatteryInfo {
+    val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        ?: return BatteryInfo(levelPercent = -1, isCharging = false)
+
+    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+    val percent = ((level * 100f) / scale).toInt().coerceIn(0, 100)
+
+    val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+    val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+
+    return BatteryInfo(levelPercent = percent, isCharging = charging)
+}
+</file>
+
+<file path="app/src/main/res/drawable/ic_launcher_background.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#3DDC84"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,0L9,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,0L19,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M29,0L29,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M39,0L39,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M49,0L49,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M59,0L59,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M69,0L69,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M79,0L79,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M89,0L89,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M99,0L99,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,9L108,9"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,19L108,19"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,29L108,29"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,39L108,39"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,49L108,49"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,59L108,59"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,69L108,69"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,79L108,79"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,89L108,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,99L108,99"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,29L89,29"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,39L89,39"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,49L89,49"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,59L89,59"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,69L89,69"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,79L89,79"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M29,19L29,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M39,19L39,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M49,19L49,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M59,19L59,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M69,19L69,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M79,19L79,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+</vector>
+</file>
+
+<file path="app/src/main/res/drawable/ic_launcher_foreground.xml">
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="85.84757"
+                android:endY="92.4963"
+                android:startX="42.9492"
+                android:startY="49.59793"
+                android:type="linear">
+                <item
+                    android:color="#44000000"
+                    android:offset="0.0" />
+                <item
+                    android:color="#00000000"
+                    android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="nonZero"
+        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
+        android:strokeWidth="1"
+        android:strokeColor="#00000000" />
+</vector>
+</file>
+
+<file path="app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+</file>
+
+<file path="app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+</file>
+
+<file path="app/src/main/res/values/colors.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
+</file>
+
+<file path="app/src/main/res/values/strings.xml">
+<resources>
+    <string name="app_name">MDM Application</string>
+</resources>
+</file>
+
+<file path="app/src/main/res/values/themes.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.MDMApplication" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
+</file>
+
+<file path="app/src/main/res/xml/backup_rules.xml">
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample backup rules file; uncomment and customize as necessary.
+   See https://developer.android.com/guide/topics/data/autobackup
+   for details.
+   Note: This file is ignored for devices older than API 31
+   See https://developer.android.com/about/versions/12/backup-restore
+-->
+<full-backup-content>
+    <!--
+   <include domain="sharedpref" path="."/>
+   <exclude domain="sharedpref" path="device.xml"/>
+-->
+</full-backup-content>
+</file>
+
+<file path="app/src/main/res/xml/data_extraction_rules.xml">
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample data extraction rules file; uncomment and customize as necessary.
+   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
+   for details.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- TODO: Use <include> and <exclude> to control what is backed up.
+        <include .../>
+        <exclude .../>
+        -->
+    </cloud-backup>
+    <!--
+    <device-transfer>
+        <include .../>
+        <exclude .../>
+    </device-transfer>
+    -->
+</data-extraction-rules>
+</file>
+
+<file path="app/src/main/res/xml/device_admin.xml">
+<device-admin>
+    <uses-policies>
+        <force-lock />
+        <wipe-data />
+        <disable-camera />
+        <limit-password />
+    </uses-policies>
+</device-admin>
+</file>
+
+<file path="app/src/test/java/com/example/mdmapplication/ExampleUnitTest.kt">
+package com.example.mdmapplication
+
+import org.junit.Test
+
+import org.junit.Assert.*
+
+/**
+ * Example local unit test, which will execute on the development machine (host).
+ *
+ * See [testing documentation](http://d.android.com/tools/testing).
+ */
+class ExampleUnitTest {
+    @Test
+    fun addition_isCorrect() {
+        assertEquals(4, 2 + 2)
+    }
+}
+</file>
+
+<file path="build.gradle.kts">
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+}
+</file>
+
+<file path="gradle.properties">
+# Project-wide Gradle settings.
+# IDE (e.g. Android Studio) users:
+# Gradle settings configured through the IDE *will override*
+# any settings specified in this file.
+# For more details on how to configure your build environment visit
+# http://www.gradle.org/docs/current/userguide/build_environment.html
+# Specifies the JVM arguments used for the daemon process.
+# The setting is particularly useful for tweaking memory settings.
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+# When configured, Gradle will run in incubating parallel mode.
+# This option should only be used with decoupled projects. For more details, visit
+# https://developer.android.com/r/tools/gradle-multi-project-decoupled-projects
+# org.gradle.parallel=true
+# AndroidX package structure to make it clearer which packages are bundled with the
+# Android operating system, and which are packaged with your app's APK
+# https://developer.android.com/topic/libraries/support-library/androidx-rn
+android.useAndroidX=true
+# Kotlin code style for this project: "official" or "obsolete":
+kotlin.code.style=official
+# Enables namespacing of each library's R class so that its R class includes only the
+# resources declared in the library itself and none from the library's dependencies,
+# thereby reducing the size of the R class for that library
+android.nonTransitiveRClass=true
+</file>
+
+<file path="gradle/wrapper/gradle-wrapper.properties">
+#Sat Dec 20 22:58:51 ICT 2025
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.13-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+</file>
+
+<file path="gradlew">
+#!/usr/bin/env sh
+
+#
+# Copyright 2015 the original author or authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+##############################################################################
+##
+##  Gradle start up script for UN*X
+##
+##############################################################################
+
+# Attempt to set APP_HOME
+# Resolve links: $0 may be a link
+PRG="$0"
+# Need this for relative symlinks.
+while [ -h "$PRG" ] ; do
+    ls=`ls -ld "$PRG"`
+    link=`expr "$ls" : '.*-> \(.*\)$'`
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG=`dirname "$PRG"`"/$link"
+    fi
+done
+SAVED="`pwd`"
+cd "`dirname \"$PRG\"`/" >/dev/null
+APP_HOME="`pwd -P`"
+cd "$SAVED" >/dev/null
+
+APP_NAME="Gradle"
+APP_BASE_NAME=`basename "$0"`
+
+# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+# Use the maximum available, or set MAX_FD != -1 to use that value.
+MAX_FD="maximum"
+
+warn () {
+    echo "$*"
+}
+
+die () {
+    echo
+    echo "$*"
+    echo
+    exit 1
+}
+
+# OS specific support (must be 'true' or 'false').
+cygwin=false
+msys=false
+darwin=false
+nonstop=false
+case "`uname`" in
+  CYGWIN* )
+    cygwin=true
+    ;;
+  Darwin* )
+    darwin=true
+    ;;
+  MINGW* )
+    msys=true
+    ;;
+  NONSTOP* )
+    nonstop=true
+    ;;
+esac
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+
+# Determine the Java command to use to start the JVM.
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        # IBM's JDK on AIX uses strange locations for the executables
+        JAVACMD="$JAVA_HOME/jre/sh/java"
+    else
+        JAVACMD="$JAVA_HOME/bin/java"
+    fi
+    if [ ! -x "$JAVACMD" ] ; then
+        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+    fi
+else
+    JAVACMD="java"
+    which java >/dev/null 2>&1 || die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+fi
+
+# Increase the maximum file descriptors if we can.
+if [ "$cygwin" = "false" -a "$darwin" = "false" -a "$nonstop" = "false" ] ; then
+    MAX_FD_LIMIT=`ulimit -H -n`
+    if [ $? -eq 0 ] ; then
+        if [ "$MAX_FD" = "maximum" -o "$MAX_FD" = "max" ] ; then
+            MAX_FD="$MAX_FD_LIMIT"
+        fi
+        ulimit -n $MAX_FD
+        if [ $? -ne 0 ] ; then
+            warn "Could not set maximum file descriptor limit: $MAX_FD"
+        fi
+    else
+        warn "Could not query maximum file descriptor limit: $MAX_FD_LIMIT"
+    fi
+fi
+
+# For Darwin, add options to specify how the application appears in the dock
+if $darwin; then
+    GRADLE_OPTS="$GRADLE_OPTS \"-Xdock:name=$APP_NAME\" \"-Xdock:icon=$APP_HOME/media/gradle.icns\""
+fi
+
+# For Cygwin or MSYS, switch paths to Windows format before running java
+if [ "$cygwin" = "true" -o "$msys" = "true" ] ; then
+    APP_HOME=`cygpath --path --mixed "$APP_HOME"`
+    CLASSPATH=`cygpath --path --mixed "$CLASSPATH"`
+
+    JAVACMD=`cygpath --unix "$JAVACMD"`
+
+    # We build the pattern for arguments to be converted via cygpath
+    ROOTDIRSRAW=`find -L / -maxdepth 1 -mindepth 1 -type d 2>/dev/null`
+    SEP=""
+    for dir in $ROOTDIRSRAW ; do
+        ROOTDIRS="$ROOTDIRS$SEP$dir"
+        SEP="|"
+    done
+    OURCYGPATTERN="(^($ROOTDIRS))"
+    # Add a user-defined pattern to the cygpath arguments
+    if [ "$GRADLE_CYGPATTERN" != "" ] ; then
+        OURCYGPATTERN="$OURCYGPATTERN|($GRADLE_CYGPATTERN)"
+    fi
+    # Now convert the arguments - kludge to limit ourselves to /bin/sh
+    i=0
+    for arg in "$@" ; do
+        CHECK=`echo "$arg"|egrep -c "$OURCYGPATTERN" -`
+        CHECK2=`echo "$arg"|egrep -c "^-"`                                 ### Determine if an option
+
+        if [ $CHECK -ne 0 ] && [ $CHECK2 -eq 0 ] ; then                    ### Added a condition
+            eval `echo args$i`=`cygpath --path --ignore --mixed "$arg"`
+        else
+            eval `echo args$i`="\"$arg\""
+        fi
+        i=`expr $i + 1`
+    done
+    case $i in
+        0) set -- ;;
+        1) set -- "$args0" ;;
+        2) set -- "$args0" "$args1" ;;
+        3) set -- "$args0" "$args1" "$args2" ;;
+        4) set -- "$args0" "$args1" "$args2" "$args3" ;;
+        5) set -- "$args0" "$args1" "$args2" "$args3" "$args4" ;;
+        6) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" ;;
+        7) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" ;;
+        8) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" "$args7" ;;
+        9) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" "$args7" "$args8" ;;
+    esac
+fi
+
+# Escape application args
+save () {
+    for i do printf %s\\n "$i" | sed "s/'/'\\\\''/g;1s/^/'/;\$s/\$/' \\\\/" ; done
+    echo " "
+}
+APP_ARGS=`save "$@"`
+
+# Collect all arguments for the java command, following the shell quoting and substitution rules
+eval set -- $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS "\"-Dorg.gradle.appname=$APP_BASE_NAME\"" -classpath "\"$CLASSPATH\"" org.gradle.wrapper.GradleWrapperMain "$APP_ARGS"
+
+exec "$JAVACMD" "$@"
+</file>
+
+<file path="gradlew.bat">
+@rem
+@rem Copyright 2015 the original author or authors.
+@rem
+@rem Licensed under the Apache License, Version 2.0 (the "License");
+@rem you may not use this file except in compliance with the License.
+@rem You may obtain a copy of the License at
+@rem
+@rem      https://www.apache.org/licenses/LICENSE-2.0
+@rem
+@rem Unless required by applicable law or agreed to in writing, software
+@rem distributed under the License is distributed on an "AS IS" BASIS,
+@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+@rem See the License for the specific language governing permissions and
+@rem limitations under the License.
+@rem
+
+@if "%DEBUG%" == "" @echo off
+@rem ##########################################################################
+@rem
+@rem  Gradle startup script for Windows
+@rem
+@rem ##########################################################################
+
+@rem Set local scope for the variables with windows NT shell
+if "%OS%"=="Windows_NT" setlocal
+
+set DIRNAME=%~dp0
+if "%DIRNAME%" == "" set DIRNAME=.
+set APP_BASE_NAME=%~n0
+set APP_HOME=%DIRNAME%
+
+@rem Resolve any "." and ".." in APP_HOME to make it shorter.
+for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
+
+@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
+
+@rem Find java.exe
+if defined JAVA_HOME goto findJavaFromJavaHome
+
+set JAVA_EXE=java.exe
+%JAVA_EXE% -version >NUL 2>&1
+if "%ERRORLEVEL%" == "0" goto execute
+
+echo.
+echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
+
+goto fail
+
+:findJavaFromJavaHome
+set JAVA_HOME=%JAVA_HOME:"=%
+set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+
+if exist "%JAVA_EXE%" goto execute
+
+echo.
+echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME%
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
+
+goto fail
+
+:execute
+@rem Setup the command line
+
+set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
+
+
+@rem Execute Gradle
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
+
+:end
+@rem End local scope for the variables with windows NT shell
+if "%ERRORLEVEL%"=="0" goto mainEnd
+
+:fail
+rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
+rem the _cmd.exe /c_ return code!
+if  not "" == "%GRADLE_EXIT_CONSOLE%" exit 1
+exit /b 1
+
+:mainEnd
+if "%OS%"=="Windows_NT" endlocal
+
+:omega
+</file>
+
+<file path="README.md">
+# MDM-AppAndroid-Mobile
+</file>
+
+<file path="settings.gradle.kts">
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "MDM Application"
+include(":app")
+</file>
+
+<file path="app/build.gradle.kts">
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+android {
+    namespace = "com.example.mdmapplication"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.example.mdmapplication"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = 1
+        versionName = "1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+}
+
+dependencies {
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
+
+    //conert sang paint phù hợp với compose BOM
+    implementation("com.google.accompanist:accompanist-drawablepainter:0.34.0")
+
+
+    //server ktor
+    val ktorVersion = "2.3.12"
+
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation ("io.ktor:ktor-client-cio:$ktorVersion")
+    // dung cai CIO nay Android dùng CIO rất hay kéo nhầm artifact -jvm như log
+  //  implementation("io.ktor:ktor-client-okhttp:${ktorVersion}")
+    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // coroutines (thường compose đã kéo, nhưng thêm cho chắc)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/data/remote/MdmApi.kt">
+package com.example.mdmapplication.data.remote
+
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
+
+class MdmApi(private val baseUrl: String) {
+
+//    private val client = HttpClient(CIO) {
+//        install(ContentNegotiation) {
+//            json(Json {
+//                ignoreUnknownKeys = true
+//                isLenient = true
+//            })
+//        }
+//    }
+
+    //khi backend trả 423 + {error,status}, Android đọc được để set UI state đúng.
+    private val client = HttpClient(CIO) {
+        expectSuccess = false
+        install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
+    }
+
+
+    private suspend inline fun <reified T> HttpResponse.bodyOrThrow(): T {
+        if (status.isSuccess()) return body()
+        val err = runCatching { body<ApiErrorResponse>() }.getOrNull()
+        throw ApiException(
+            httpCode = status.value,
+            backendStatus = err?.status,
+            message = err?.error ?: "HTTP ${status.value}"
+        )
+    }
+    class ApiException(
+        val httpCode: Int,
+        val backendStatus: String? = null,
+        override val message: String
+    ) : Exception(message)
+
+    // ===== AUTH =====
+/*
+    suspend fun login(username: String, password: String): LoginResponse =
+        client.post("$baseUrl/api/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody(LoginRequest(username, password))
+        }.bodyOrThrow()
+*/
+
+    // ===== AUTH =====
+    suspend fun login(username: String, password: String, deviceCode: String? = null): LoginResponse =
+        client.post("$baseUrl/api/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody(LoginRequest(username, password, deviceCode))
+        }.bodyOrThrow()
+
+    // ===== USAGE (BATCH) =====
+    suspend fun reportUsageBatch(token: String, req: UsageBatchReportRequest): UsageBatchReportResponse =
+        client.post("$baseUrl/api/device/usage/batch") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+// (tuỳ chọn) bỏ reportUsage cũ hoặc giữ nhưng không dùng nữa
+// suspend fun reportUsage(...) { ... }  // backend đã bỏ /usage
+
+    // ===== COMMANDS =====
+    suspend fun pollCommands(token: String, req: DevicePollCommandsRequest): DevicePollCommandsResponse =
+        client.post("$baseUrl/api/device/poll") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun ackCommand(token: String, req: DeviceAckCommandRequest): DeviceAckCommandResponse =
+        client.post("$baseUrl/api/device/ack") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    // ===== DEVICE =====
+    suspend fun registerDevice(token: String, req: DeviceRegisterRequest): DeviceRegisterResponse =
+        client.post("$baseUrl/api/device/register") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun unlockDevice(token: String, req: DeviceUnlockRequest): DeviceUnlockResponse =
+        client.post("$baseUrl/api/device/unlock") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    // deviceCode bắt buộc theo backend mới
+    suspend fun fetchConfig(token: String, userCode: String, deviceCode: String): DeviceConfigResponse =
+        client.get("$baseUrl/api/device/config/$userCode?deviceCode=$deviceCode") {
+            header("Authorization", "Bearer $token")
+        }.bodyOrThrow()
+
+    suspend fun updateLocation(token: String, req: LocationUpdateRequest) =
+        client.post("$baseUrl/api/device/location") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.body<Map<String, Boolean>>()
+
+    suspend fun reportUsage(token: String, req: UsageReportRequest) =
+        client.post("$baseUrl/api/device/usage") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.body<Map<String, Boolean>>()
+
+    suspend fun sendEvent(token: String, deviceCode: String, req: DeviceEventRequest) =
+        client.post("$baseUrl/api/device/$deviceCode/events") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.body<Map<String, Boolean>>()
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/data/remote/MdmDtos.kt">
+package com.example.mdmapplication.data.remote
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class LoginRequest(
+    val username: String,
+     val password: String,
+     val deviceCode: String? = null,
+    )
+
+@Serializable
+data class LoginResponse(
+    val token: String,
+    val expiresAtEpochMillis: Long,
+    val role: String
+)
+// giữ LoginResponse như cũ
+
+@Serializable
+data class UsageBatchReportRequest(
+    val deviceCode: String,
+    val items: List<UsageItem>,
+) {
+    @Serializable
+    data class UsageItem(
+        val packageName: String,
+        val startedAtEpochMillis: Long,
+        val endedAtEpochMillis: Long,
+        val durationMs: Long,
+    )
+}
+
+@Serializable
+data class UsageBatchReportResponse(
+    val ok: Boolean,
+    val inserted: Int,
+)
+
+
+// ✅ Commands (match backend CommandDtos)
+@Serializable
+data class DevicePollCommandsRequest(
+    val deviceCode: String,
+    val limit: Int = 1,
+)
+
+@Serializable
+data class DevicePollCommandsResponse(
+    val commands: List<DeviceLeasedCommand>,
+    val serverTimeEpochMillis: Long,
+)
+
+@Serializable
+data class DeviceLeasedCommand(
+    val id: String,
+    val type: String,
+    val payload: String,
+    val status: String,
+    val leaseToken: String,
+    val leaseExpiresAtEpochMillis: Long,
+    val createdAtEpochMillis: Long,
+)
+
+@Serializable
+data class DeviceAckCommandRequest(
+    val deviceCode: String,
+    val commandId: String,
+    val leaseToken: String,
+    val result: String, // SUCCESS|FAILED
+    val error: String? = null,
+    val output: String? = null,
+)
+
+@Serializable
+data class DeviceAckCommandResponse(
+    val ok: Boolean,
+    val status: String,
+)
+/**
+ * Đồng bộ theo backend DeviceRegisterRequest
+ */
+@Serializable
+data class DeviceRegisterRequest(
+    val deviceCode: String,
+
+    // thiết bị
+    val androidVersion: String = "",
+    val sdkInt: Int = 0,
+    val manufacturer: String = "",
+    val model: String = "",
+    val imei: String = "",
+    val serial: String = "",
+
+    // trạng thái tạm để test
+    val batteryLevel: Int = -1,
+    val isCharging: Boolean = false,
+    val wifiEnabled: Boolean = false
+)
+
+/**
+ * Đồng bộ theo backend DeviceRegisterResponse
+ */
+@Serializable
+data class DeviceRegisterResponse(
+    val deviceId: String,
+    val deviceCode: String,
+    val status: String,           // ACTIVE / LOCKED
+    val message: String? = null
+)
+
+/**
+ * Đồng bộ theo backend DeviceConfigResponse
+ */
+@Serializable
+data class DeviceConfigResponse(
+    val userCode: String,
+    val allowedApps: List<String> = emptyList(),
+
+    val disableWifi: Boolean = false,
+    val disableBluetooth: Boolean = false,
+    val disableCamera: Boolean = false,
+    val disableStatusBar: Boolean = false,
+    val kioskMode: Boolean = false,
+    val blockUninstall: Boolean = false,
+
+    val showWifi: Boolean = true,
+    val showBluetooth: Boolean = true,
+
+    val configVersionEpochMillis: Long = 0
+)
+
+// ===== Missing DTOs (đang làm bạn lỗi compile) =====
+
+@Serializable
+data class DeviceUnlockRequest(
+    val deviceCode: String,
+    val password: String
+)
+
+@Serializable
+data class DeviceUnlockResponse(
+    val status: String,   // ACTIVE / LOCKED
+    val message: String
+)
+
+@Serializable
+data class LocationUpdateRequest(
+    val deviceCode: String,
+    val latitude: Double,
+    val longitude: Double,
+    val accuracyMeters: Double = 0.0
+)
+
+@Serializable
+data class UsageReportRequest(
+    val deviceCode: String,
+    val packageName: String,
+    val startedAtEpochMillis: Long,
+    val endedAtEpochMillis: Long,
+    val durationMs: Long
+)
+
+@Serializable
+data class DeviceEventRequest(
+    val type: String,
+    val payload: String = "{}"
+)
+
+@Serializable
+data class ApiErrorResponse(
+    val error: String? = null,
+    val status: String? = null
+)
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/device/DevicePolicyHelper.kt">
+/*
+//package com.example.mdmapplication.device
+//
+//import android.app.admin.DevicePolicyManager
+//import android.content.ComponentName
+//import android.content.Context
+//import android.content.Intent
+//import android.content.IntentFilter
+//import com.example.mdmapplication.ui.launcher.LauncherActivity
+//
+//class DevicePolicyHelper(private val context: Context) {
+//
+//    private val dpm =
+//        context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+//
+//    private val admin =
+//        ComponentName(context, MyDeviceAdminReceiver::class.java)
+//
+//    fun enableKiosk(packageName: String) {
+//        dpm.setLockTaskPackages(admin, arrayOf(packageName))
+//    }
+//
+//    fun blockUninstall(pkg: String) {
+//        dpm.setUninstallBlocked(admin, pkg, true)
+//    }
+//
+//    fun disableStatusBar() {
+//        dpm.setStatusBarDisabled(admin, true)
+//    }
+//
+//    /** Đóng đinh HOME về LauncherActivity của app (persistent) */
+//    fun setPersistentHomeToLauncher() {
+//        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+//            addCategory(Intent.CATEGORY_HOME)
+//            addCategory(Intent.CATEGORY_DEFAULT)
+//        }
+//        val launcher = ComponentName(context, LauncherActivity::class.java)
+//        dpm.addPersistentPreferredActivity(admin, filter, launcher)
+//    }
+//
+//    /** Gỡ tất cả persistent preferred activities mà app này đã set */
+//    fun clearPersistentPreferredActivities() {
+//        // Gỡ persistent preferred activities cho chính package của app
+//        dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
+//    }
+//
+//    /** Gói thao tác "apply kiosk + set home + block uninstall" */
+//    fun applyKioskAsHome(packageName: String) {
+//        setPersistentHomeToLauncher()
+//        enableKiosk(packageName)
+//        blockUninstall(packageName)
+//    }
+//}
+*/
+
+//code cu phia tren chay mdm cu, de ket noi toi backend can nang cap
+//DevicePolicyHelper để apply policy từ backend
+
+package com.example.mdmapplication.device
+
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.UserManager
+import com.example.mdmapplication.ui.launcher.LauncherActivity
+
+class DevicePolicyHelper(private val context: Context) {
+
+    private val dpm =
+        context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+    private val userManager =
+        context.getSystemService(Context.USER_SERVICE) as UserManager
+
+    private val admin =
+        ComponentName(context, MyDeviceAdminReceiver::class.java)
+
+    /** Allow lock-task for packages (launcher + allowed apps) */
+    fun setLockTaskPackages(packages: Array<String>) {
+        dpm.setLockTaskPackages(admin, packages)
+    }
+
+    fun blockUninstall(pkg: String) {
+        dpm.setUninstallBlocked(admin, pkg, true)
+    }
+
+    fun disableStatusBar(disabled: Boolean) {
+        dpm.setStatusBarDisabled(admin, disabled)
+    }
+
+    private fun setUserRestriction(key: String, disabled: Boolean) {
+        if (disabled) dpm.addUserRestriction(admin, key)
+        else dpm.clearUserRestriction(admin, key)
+    }
+
+    fun setWifiDisabled(disabled: Boolean) {
+        setUserRestriction(UserManager.DISALLOW_CONFIG_WIFI, disabled)
+    }
+
+    fun setBluetoothDisabled(disabled: Boolean) {
+        setUserRestriction(UserManager.DISALLOW_BLUETOOTH, disabled)
+    }
+
+    fun setCameraDisabled(disabled: Boolean) {
+        dpm.setCameraDisabled(admin, disabled)
+    }
+
+    /** Đóng đinh HOME về LauncherActivity của app (persistent) */
+    fun setPersistentHomeToLauncher() {
+        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+        val launcher = ComponentName(context, LauncherActivity::class.java)
+        dpm.addPersistentPreferredActivity(admin, filter, launcher)
+    }
+
+    fun clearPersistentPreferredActivities() {
+        dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
+    }
+
+    /** Apply policy từ server */
+    fun applyFromServerConfig(
+        launcherPackage: String,
+        allowedApps: List<String>,
+        kioskMode: Boolean,
+        disableStatusBar: Boolean,
+        blockUninstall: Boolean,
+        disableWifi: Boolean,
+        disableBluetooth: Boolean,
+        disableCamera: Boolean
+    ) {
+        // HOME
+        setPersistentHomeToLauncher()
+
+        // Lock task allowlist = launcher + allowed packages
+        val lockPackages = (listOf(launcherPackage) + allowedApps).distinct().toTypedArray()
+        setLockTaskPackages(lockPackages)
+
+        // Uninstall + statusbar
+        if (blockUninstall) blockUninstall(launcherPackage)
+        disableStatusBar(disableStatusBar)
+
+        // restrictions
+        setWifiDisabled(disableWifi)
+        setBluetoothDisabled(disableBluetooth)
+        setCameraDisabled(disableCamera)
+
+        // kioskMode => activity sẽ gọi startLockTask() (vì cần Activity context)
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherActivity.kt">
+package com.example.mdmapplication.ui.launcher
+
+import android.app.admin.DevicePolicyManager
+import android.content.Context
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.example.mdmapplication.BuildConfig
+import com.example.mdmapplication.device.DevicePolicyHelper
+import kotlinx.coroutines.flow.collectLatest
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+
+class LauncherActivity : ComponentActivity() {
+
+    private val viewModel: LauncherViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val policy = DevicePolicyHelper(this)
+        val isDo = dpm.isDeviceOwnerApp(packageName)
+
+        if (isDo && BuildConfig.DEBUG) {
+            policy.clearPersistentPreferredActivities()
+        }
+
+        // Fetch từ backend khi khởi động
+        viewModel.refreshFromBackend(this)
+
+        // Apply policy khi config thay đổi
+        lifecycleScope.launch {
+            viewModel.state.collectLatest { st ->
+                val cfg = st.config ?: return@collectLatest
+                if (!isDo) return@collectLatest
+
+                policy.applyFromServerConfig(
+                    launcherPackage = packageName,
+                    allowedApps = cfg.allowedApps,
+                    kioskMode = cfg.kioskMode,
+                    disableStatusBar = cfg.disableStatusBar,
+                    blockUninstall = cfg.blockUninstall,
+                    disableWifi = cfg.disableWifi,
+                    disableBluetooth = cfg.disableBluetooth,
+                    disableCamera = cfg.disableCamera
+                )
+
+                if (cfg.kioskMode && !BuildConfig.DEBUG) {
+                    try { startLockTask() } catch (_: Throwable) {}
+                }
+            }
+        }
+
+        setContent {
+            val st by viewModel.state.collectAsState()
+
+            when (st.lockState) {
+                DeviceLockState.LOCKED -> {
+                    // Hiện màn hình nhập mật khẩu unlock
+                    UnlockScreen(
+                        error = st.unlockError,
+                        loading = st.loading,
+                        onUnlock = { password ->
+                            viewModel.unlock(this@LauncherActivity, password)
+                        }
+                    )
+                }
+                DeviceLockState.ACTIVE -> {
+                    LauncherScreen(
+                        apps = st.apps,
+                        isDeviceOwner = isDo,
+                        onAppClick = { pkg ->
+                            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+                        },
+                        onClearPersistentHome = {
+                            if (isDo) policy.clearPersistentPreferredActivities()
+                        },
+                        onApplyKioskHome = {
+                            if (isDo) {
+                                st.config?.let { cfg ->
+                                    policy.applyFromServerConfig(
+                                        launcherPackage = packageName,
+                                        allowedApps = cfg.allowedApps,
+                                        kioskMode = cfg.kioskMode,
+                                        disableStatusBar = cfg.disableStatusBar,
+                                        blockUninstall = cfg.blockUninstall,
+                                        disableWifi = cfg.disableWifi,
+                                        disableBluetooth = cfg.disableBluetooth,
+                                        disableCamera = cfg.disableCamera
+                                    )
+                                }
+                            }
+                        },
+                        onExitLockTask = { try { stopLockTask() } catch (_: Throwable) {} }
+                    )
+                }
+                DeviceLockState.UNKNOWN -> {
+                    // Màn hình loading / lỗi
+                    LoadingOrErrorScreen(
+                        loading = st.loading,
+                        error = st.error,
+                        onRetry = { viewModel.refreshFromBackend(this@LauncherActivity) }
+                    )
+                }
+            }
+        }
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherScreen.kt">
+package com.example.mdmapplication.ui.launcher
+
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.example.mdmapplication.BuildConfig
+import com.example.mdmapplication.model.LauncherApp
+import com.google.accompanist.drawablepainter.rememberDrawablePainter
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LauncherScreen(
+    apps: List<LauncherApp>,
+    isDeviceOwner: Boolean,
+    onAppClick: (String) -> Unit,
+    onClearPersistentHome: () -> Unit,
+    onApplyKioskHome: () -> Unit,
+    onExitLockTask: () -> Unit
+) {
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("MDM Launcher") }) }
+    ) { padding ->
+
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+        ) {
+
+            // ===== DEBUG CONTROL PANEL =====
+            if (BuildConfig.DEBUG) {
+                Card(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Dev Control Panel",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        Text(
+                            text = if (isDeviceOwner) "Device Owner: YES" else "Device Owner: NO",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(12.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onClearPersistentHome,
+                                enabled = isDeviceOwner
+                            ) {
+                                Text("Clear HOME")
+                            }
+                            Button(
+                                onClick = onApplyKioskHome,
+                                enabled = isDeviceOwner
+                            ) {
+                                Text("Apply Kiosk+HOME")
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onExitLockTask) {
+                                Text("Exit LockTask")
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Tip: Clear HOME giúp Android Studio kill/re-run dễ hơn.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            // ===== APP GRID =====
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
+                items(apps) { app ->
+                    Column(
+                        modifier = Modifier
+                            .padding(8.dp)
+                            .fillMaxWidth()
+                            .clickable { onAppClick(app.packageName) },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Image(
+                            painter = rememberDrawablePainter(app.icon),
+                            contentDescription = app.label,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(app.label)
+                    }
+                }
+            }
+        }
+    }
+}
+</file>
+
+<file path="gradle/libs.versions.toml">
+[versions]
+agp = "8.12.3"
+kotlin = "2.0.21"
+coreKtx = "1.17.0"
+junit = "4.13.2"
+junitVersion = "1.3.0"
+espressoCore = "3.7.0"
+lifecycleRuntimeKtx = "2.10.0"
+activityCompose = "1.12.2"
+composeBom = "2024.09.00"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+</file>
+
+<file path="app/src/main/AndroidManifest.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- query theo intent LAUNCHER xu ly mat hien thi chrome -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Battery info -->
+    <!--    <uses-permission android:name="android.permission.BATTERY_STATS" /> -->
+    <!-- xoa, vì không Không được cấp → để lại chỉ gây nhiễu warning.,Không giúp gì cho use-case “pin level / charging”.  -->
+           <!-- WiFi info -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- Location (GPS gửi lên backend) -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Usage stats (theo dõi thời gian dùng app) -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MDMApplication">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.launcher.LauncherActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".device.MyDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherViewModel.kt">
+package com.example.mdmapplication.ui.launcher
+
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
+import android.os.Build
+import android.provider.Settings
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.mdmapplication.data.remote.*
+import com.example.mdmapplication.model.LauncherApp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+enum class DeviceLockState { UNKNOWN, LOCKED, ACTIVE }
+
+data class LauncherUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val lockState: DeviceLockState = DeviceLockState.UNKNOWN,
+    val unlockError: String? = null,
+    val config: DeviceConfigResponse? = null,
+    val apps: List<LauncherApp> = emptyList()
+)
+
+class LauncherViewModel : ViewModel() {
+
+    private val _state = MutableStateFlow(LauncherUiState())
+    val state: StateFlow<LauncherUiState> = _state
+
+    // ĐỔI IP NÀY theo môi trường:
+    // Emulator: http://10.0.2.2:8080
+    // Thiết bị thật: http://<IP_LAN_PC>:8080
+    private val api = MdmApi(baseUrl = "http://10.0.2.2:8080")
+
+    private val deviceUser = "device"
+    private val devicePass = "device123"
+    private val userCode = "TEST123"  // phải khớp seed backend
+
+    private var cachedToken: String? = null
+    private var cachedDeviceCode: String? = null
+
+    // ===== BƯỚC 1: Login + Register + Kiểm tra trạng thái =====
+    fun refreshFromBackend(context: Context) {
+        viewModelScope.launch {
+            try {
+/*                _state.value = _state.value.copy(loading = true, error = null)
+
+                val token = getOrRefreshToken()
+                val deviceCode = getDeviceCode(context)
+                cachedDeviceCode = deviceCode
+
+                val registerResp = api.registerDevice(
+                    token = token,
+                    req = buildRegisterRequest(context, deviceCode)
+                )*/
+
+                //dao thu tu lay deviceCode len truoc
+                _state.value = _state.value.copy(loading = true, error = null)
+
+                val deviceCode = getDeviceCode(context)
+                cachedDeviceCode = deviceCode
+
+                val token = getOrRefreshToken(deviceCode)
+
+                val registerResp = api.registerDevice(
+                    token = token,
+                    req = buildRegisterRequest(context, deviceCode)
+                )
+
+                // Map theo status trả về từ DTO mới
+                when (registerResp.status) {
+                    "LOCKED" -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            lockState = DeviceLockState.LOCKED
+                        )
+                    }
+                    "ACTIVE" -> {
+                        loadConfig(token, deviceCode, context)
+                    }
+                    else -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            error = "Trạng thái không xác định: ${registerResp.status}"
+                        )
+                    }
+                }
+            } catch (e: MdmApi.ApiException) {
+                handleApiException(e)
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(loading = false, error = t.message ?: "Lỗi kết nối")
+            }
+        }
+    }
+
+    // ===== BƯỚC 2: Unlock (khi user nhập mật khẩu) =====
+    fun unlock(context: Context, password: String) {
+        val deviceCode = cachedDeviceCode ?: return
+        viewModelScope.launch {
+            try {
+                _state.value = _state.value.copy(loading = true, unlockError = null)
+                val token = getOrRefreshToken()
+
+                val resp = api.unlockDevice(
+                    token = token,
+                    req = DeviceUnlockRequest(deviceCode = deviceCode, password = password)
+                )
+
+                if (resp.status == "ACTIVE") {
+                    loadConfig(token, deviceCode, context)
+                } else {
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        unlockError = "Mật khẩu không chính xác."
+                    )
+                }
+            } catch (e: MdmApi.ApiException) {
+                if (e.httpCode == 423) {
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        lockState = DeviceLockState.LOCKED,
+                        unlockError = e.message // Hiển thị thông báo khóa từ server
+                    )
+                } else {
+                    _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                }
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(loading = false, unlockError = t.message)
+            }
+        }
+    }
+
+    // ===== BƯỚC 3: Load config sau khi ACTIVE =====
+
+    //lấy deviceCode
+    private suspend fun getOrRefreshToken(deviceCode: String): String {
+        return cachedToken ?: api.login(deviceUser, devicePass, deviceCode).token.also { cachedToken = it }
+    }
+    private suspend fun loadConfig(token: String, deviceCode: String, context: Context) {
+        try {
+            val config = api.fetchConfig(token, userCode, deviceCode)
+            val apps = loadAllowedApps(context, config.allowedApps)
+
+            _state.value = LauncherUiState(
+                loading = false,
+                lockState = DeviceLockState.ACTIVE,
+                config = config,
+                apps = apps
+            )
+
+            startLocationLoop(token, deviceCode)
+
+            startUsageReportLoop(token, deviceCode, context)
+            //goi command loop sau, de dam bao chi active moi co quyen nhan lenh
+            startCommandLoop(token, deviceCode)
+        } catch (e: MdmApi.ApiException) {
+            if (e.httpCode == 423) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    error = "Thiết bị đã bị khóa từ hệ thống."
+                )
+            } else {
+                throw e // Để catch bên ngoài xử lý
+            }
+        }
+    }
+
+    // ===== LOCATION LOOP: mỗi 60 giây =====
+    private fun startLocationLoop(token: String, deviceCode: String) {
+        viewModelScope.launch {
+            while (true) {
+                try {
+                    // Dùng last known location - cần permission ACCESS_COARSE_LOCATION
+                    // Nếu muốn GPS thật, thêm LocationManager/FusedLocationProvider
+                    // Đây là placeholder - bạn thay bằng location thật
+                    api.updateLocation(
+                        token = token,
+                        req = LocationUpdateRequest(
+                            deviceCode = deviceCode,
+                            latitude = 0.0,
+                            longitude = 0.0,
+                            accuracyMeters = 0.0
+                        )
+                    )
+                } catch (_: Throwable) { /* silent fail */ }
+                delay(60_000L)
+            }
+        }
+    }
+
+    // ===== USAGE LOOP: mỗi 5 phút gửi batch =====
+/*    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
+        viewModelScope.launch {
+            while (true) {
+                delay(5 * 60_000L)
+                try {
+                    val endMs = System.currentTimeMillis()
+                    val startMs = endMs - 5 * 60_000L
+
+                    val usageList = collectAppUsage(context, startMs, endMs)
+                    for (usage in usageList) {
+                        api.reportUsage(
+                            token = token,
+                            req = UsageReportRequest(
+                                deviceCode = deviceCode,
+                                packageName = usage.packageName,
+                                startedAtEpochMillis = usage.startMs,
+                                endedAtEpochMillis = usage.endMs,
+                                durationMs = usage.durationMs
+                            )
+                        )
+                    }
+                } catch (_: Throwable) { *//* silent fail *//* }
+            }
+        }
+    }*/
+
+    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
+        viewModelScope.launch {
+            while (true) {
+                delay(5 * 60_000L)
+                try {
+                    val endMs = System.currentTimeMillis()
+                    val startMs = endMs - 5 * 60_000L
+
+                    val usageList = collectAppUsage(context, startMs, endMs)
+                    if (usageList.isEmpty()) continue
+
+                    val items = usageList.map {
+                        UsageBatchReportRequest.UsageItem(
+                            packageName = it.packageName,
+                            startedAtEpochMillis = it.startMs,
+                            endedAtEpochMillis = it.endMs,
+                            durationMs = it.durationMs
+                        )
+                    }
+
+                    api.reportUsageBatch(
+                        token = token,
+                        req = UsageBatchReportRequest(deviceCode = deviceCode, items = items)
+                    )
+                } catch (_: Throwable) { /* silent fail */ }
+            }
+        }
+    }
+
+
+
+    //====== POLL COMMANDS LOOP: mỗi 30 giây =====
+
+    private data class CommandExecResult(
+        val result: String,           // "SUCCESS" | "FAILED"
+        val error: String? = null,
+        val output: String? = null,
+    )
+
+    private fun startCommandLoop(token: String, deviceCode: String) {
+        viewModelScope.launch {
+            while (true) {
+                delay(10_000L)
+                try {
+                    val resp = api.pollCommands(token, DevicePollCommandsRequest(deviceCode, limit = 3))
+                    for (cmd in resp.commands) {
+                        val exec = executeCommand(cmd)
+                        api.ackCommand(
+                            token,
+                            DeviceAckCommandRequest(
+                                deviceCode = deviceCode,
+                                commandId = cmd.id,
+                                leaseToken = cmd.leaseToken,
+                                result = exec.result,
+                                error = exec.error,
+                                output = exec.output
+                            )
+                        )
+                    }
+                } catch (_: Throwable) { /* silent fail */ }
+            }
+        }
+    }
+
+    private fun executeCommand(cmd: DeviceLeasedCommand): CommandExecResult {
+        // MVP: chỉ ACK để thông pipeline. Về sau map type->DevicePolicyHelper
+        return when (cmd.type.uppercase()) {
+            "PING" -> CommandExecResult(result = "SUCCESS", output = "pong")
+            else -> CommandExecResult(result = "FAILED", error = "Unsupported command: ${cmd.type}")
+        }
+    }
+
+
+    // ===== GỬI EVENT =====
+    fun sendEvent(type: String, payload: String = "{}") {
+        val deviceCode = cachedDeviceCode ?: return
+        viewModelScope.launch {
+            try {
+                val token = getOrRefreshToken()
+                api.sendEvent(token, deviceCode, DeviceEventRequest(type = type, payload = payload))
+            } catch (_: Throwable) {}
+        }
+    }
+
+    // ===== HELPERS =====
+    private suspend fun getOrRefreshToken(): String {
+        return cachedToken ?: api.login(deviceUser, devicePass).token.also { cachedToken = it }
+    }
+
+    private fun getDeviceCode(context: Context): String =
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "UNKNOWN"
+
+    private fun buildRegisterRequest(context: Context, deviceCode: String): DeviceRegisterRequest {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val batteryLevel = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val isCharging = bm.isCharging
+
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val wifiEnabled = wm.isWifiEnabled
+
+        return DeviceRegisterRequest(
+            deviceCode = deviceCode,
+            androidVersion = Build.VERSION.RELEASE,
+            sdkInt = Build.VERSION.SDK_INT,
+            manufacturer = Build.MANUFACTURER,
+            model = Build.MODEL,
+            imei = "",          // cần READ_PHONE_STATE permission, để trống nếu chưa có
+            serial = "",        // Android 8+ cần permission
+            batteryLevel = batteryLevel,
+            isCharging = isCharging,
+            wifiEnabled = wifiEnabled
+        )
+    }
+
+    private fun loadAllowedApps(context: Context, packages: List<String>): List<LauncherApp> {
+        val pm = context.packageManager
+        return packages.mapNotNull { pkg ->
+            try {
+                val info = pm.getApplicationInfo(pkg, 0)
+                LauncherApp(
+                    packageName = pkg,
+                    label = pm.getApplicationLabel(info).toString(),
+                    icon = pm.getApplicationIcon(info)
+                )
+            } catch (_: Exception) { null }
+        }
+    }
+
+    // Collect usage stats (cần PACKAGE_USAGE_STATS permission)
+    private data class AppUsageEntry(
+        val packageName: String,
+        val startMs: Long,
+        val endMs: Long,
+        val durationMs: Long
+    )
+
+    private fun collectAppUsage(context: Context, startMs: Long, endMs: Long): List<AppUsageEntry> {
+        return try {
+            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            val stats = usm.queryUsageStats(
+                android.app.usage.UsageStatsManager.INTERVAL_BEST,
+                startMs, endMs
+            )
+            stats
+                .filter { it.totalTimeInForeground > 0 }
+                .map { s ->
+                    AppUsageEntry(
+                        packageName = s.packageName,
+                        startMs = s.firstTimeStamp,
+                        endMs = s.lastTimeStamp,
+                        durationMs = s.totalTimeInForeground
+                    )
+                }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    // Helper xử lý lỗi API chung
+    private fun handleApiException(e: MdmApi.ApiException) {
+        if (e.httpCode == 423) {
+            _state.value = _state.value.copy(
+                loading = false,
+                lockState = DeviceLockState.LOCKED,
+                unlockError = e.message
+            )
+        } else {
+            _state.value = _state.value.copy(loading = false, error = e.message)
+        }
+    }
+}
+</file>
+
+</files>
