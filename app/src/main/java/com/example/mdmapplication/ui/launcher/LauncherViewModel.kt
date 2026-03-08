@@ -47,7 +47,7 @@ class LauncherViewModel : ViewModel() {
 
     private val deviceUser = "device"
     private val devicePass = "device123"
-    private val userCode = "TEST456"  // phải khớp seed backend
+    private val userCode = "TEST123"  // phải khớp seed backend
 
     private var cachedToken: String? = null
     private var cachedDeviceCode: String? = null
@@ -193,7 +193,7 @@ class LauncherViewModel : ViewModel() {
 
             startUsageReportLoop(token, deviceCode, context)
             //goi command loop sau, de dam bao chi active moi co quyen nhan lenh
-            startCommandLoop(token, deviceCode)
+            startCommandLoop(context,token, deviceCode)
             startConfigSyncLoop(token, deviceCode, context)
         } catch (e: MdmApi.ApiException) {
             if (e.httpCode == 423) {
@@ -301,7 +301,7 @@ class LauncherViewModel : ViewModel() {
         val output: String? = null,
     )
 
-    private fun startCommandLoop(token: String, deviceCode: String) {
+    private fun startCommandLoop(context: Context, token : String, deviceCode: String) {
         if(commandLoopStarted) return
         commandLoopStarted = true
         viewModelScope.launch {
@@ -322,8 +322,10 @@ class LauncherViewModel : ViewModel() {
                                 output = exec.output
                             )
                         )
+                        refreshConfigOnly(context)
                     }
                 } catch (_: Throwable) { /* silent fail */ }
+                delay(5_000L)
             }
         }
     }
@@ -368,6 +370,28 @@ class LauncherViewModel : ViewModel() {
         }
     }
 
+    // reload config từ server mà không cần đợi đến lần refresh định kỳ tiếp theo, thường dùng sau khi nhận được command REFRESH_CONFIG
+
+
+    private fun refreshConfigOnly(context: Context) {
+        val token = cachedToken ?: return
+        val deviceCode = cachedDeviceCode ?: return
+
+        viewModelScope.launch {
+            try {
+                val config = api.fetchConfig(token, userCode, deviceCode)
+                val apps = loadAllowedApps(context, config.allowedApps)
+
+                _state.value = _state.value.copy(
+                    config = config,
+                    apps = apps,
+                    error = null
+                )
+            } catch (_: Throwable) {
+                // silent hoặc log nhẹ
+            }
+        }
+    }
 
     // ===== GỬI EVENT =====
     fun sendEvent(type: String, payload: String = "{}") {
