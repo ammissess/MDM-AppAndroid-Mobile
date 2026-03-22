@@ -2,7 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- query theo intent LAUNCHER xu ly mat hien thi chrome -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -10,22 +9,13 @@
         </intent>
     </queries>
 
-
-    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!-- Battery info -->
-    <!--    <uses-permission android:name="android.permission.BATTERY_STATS" /> -->
-    <!-- xoa, vì không Không được cấp → để lại chỉ gây nhiễu warning.,Không giúp gì cho use-case “pin level / charging”.  -->
-           <!-- WiFi info -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-
-    <!-- Location (GPS gửi lên backend) -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Usage stats (theo dõi thời gian dùng app) -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
@@ -51,7 +41,9 @@
 
         <activity
             android:name=".ui.launcher.LauncherActivity"
-            android:exported="true">
+            android:exported="true"
+            android:lockTaskMode="if_whitelisted"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
@@ -68,6 +60,18 @@
                 android:resource="@xml/device_admin" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".device.BootCompletedReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
