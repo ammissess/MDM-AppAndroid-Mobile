@@ -90,9 +90,11 @@ class LauncherViewModel : ViewModel() {
                         )
                         _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                     }
+
                     "ACTIVE" -> {
                         loadConfig(context)
                     }
+
                     else -> {
                         _state.value = _state.value.copy(
                             loading = false,
@@ -144,6 +146,7 @@ class LauncherViewModel : ViewModel() {
                         )
                         _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                     }
+
                     isDeviceCodeMismatch(e) -> {
                         clearToken()
                         _state.value = _state.value.copy(
@@ -151,12 +154,30 @@ class LauncherViewModel : ViewModel() {
                             unlockError = "Device session mismatch, vui lòng thử lại."
                         )
                     }
+
                     else -> {
                         _state.value = _state.value.copy(loading = false, unlockError = e.message)
                     }
                 }
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(loading = false, unlockError = t.message ?: "Lỗi mở khóa")
+            }
+        }
+    }
+
+    fun sendEvent(type: String, payload: String = "{}") {
+        val deviceCode = cachedDeviceCode ?: return
+        viewModelScope.launch {
+            try {
+                val token = getOrRefreshToken(deviceCode)
+                api.sendEvent(
+                    token = token,
+                    deviceCode = deviceCode,
+                    req = DeviceEventRequest(type = type, payload = payload)
+                )
+            } catch (e: MdmApi.ApiException) {
+                if (isDeviceCodeMismatch(e)) clearToken()
+            } catch (_: Throwable) {
             }
         }
     }
@@ -383,11 +404,17 @@ class LauncherViewModel : ViewModel() {
                         }
                     )
             }
+
             "lock_screen" -> {
-                _state.value = _state.value.copy(lockState = DeviceLockState.LOCKED, config = null, apps = emptyList())
+                _state.value = _state.value.copy(
+                    lockState = DeviceLockState.LOCKED,
+                    config = null,
+                    apps = emptyList()
+                )
                 _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                 CommandExecResult(success = true, output = "Lock screen requested")
             }
+
             else -> {
                 CommandExecResult(
                     success = false,
@@ -449,7 +476,6 @@ class LauncherViewModel : ViewModel() {
         )
     }
 
-    // FIX #2: không mapNotNull im lặng, log rõ package lỗi + set error khi list rỗng nhưng allowedApps không rỗng
     private fun loadAllowedApps(context: Context, packages: List<String>): List<LauncherApp> {
         val pm = context.packageManager
         val resolvedApps = mutableListOf<LauncherApp>()
@@ -493,7 +519,8 @@ class LauncherViewModel : ViewModel() {
 
     private fun collectAppUsage(context: Context, startMs: Long, endMs: Long): List<AppUsageEntry> {
         return runCatching {
-            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            val usm =
+                context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
             usm.queryUsageStats(
                 android.app.usage.UsageStatsManager.INTERVAL_BEST,
                 startMs,
@@ -528,6 +555,7 @@ class LauncherViewModel : ViewModel() {
                 )
                 _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
             }
+
             isDeviceCodeMismatch(e) -> {
                 clearToken()
                 _state.value = _state.value.copy(
@@ -535,6 +563,7 @@ class LauncherViewModel : ViewModel() {
                     error = "Device session mismatch, đã reset token. Vui lòng thử lại."
                 )
             }
+
             else -> {
                 _state.value = _state.value.copy(
                     loading = false,

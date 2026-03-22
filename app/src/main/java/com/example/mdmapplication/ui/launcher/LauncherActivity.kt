@@ -51,7 +51,7 @@ class LauncherActivity : ComponentActivity() {
                     val cfg = st.config ?: return@collectLatest
                     if (lastAppliedConfigVersion != cfg.configVersionEpochMillis) {
                         lastAppliedConfigVersion = cfg.configVersionEpochMillis
-                        // Giữ re-assert ở Activity để an toàn vòng đời
+
                         policy.applyFromServerConfig(
                             launcherPackage = packageName,
                             allowedApps = cfg.allowedApps,
@@ -68,7 +68,10 @@ class LauncherActivity : ComponentActivity() {
                             kioskMode = cfg.kioskMode,
                             allowSettingsIfExplicitlyWhitelisted = true
                         )
-                        if (cfg.kioskMode && !BuildConfig.DEBUG) runCatching { startLockTask() }
+
+                        if (cfg.kioskMode && !BuildConfig.DEBUG) {
+                            runCatching { startLockTask() }
+                        }
                     }
                 }
             }
@@ -77,17 +80,24 @@ class LauncherActivity : ComponentActivity() {
         lifecycleScope.launch {
             viewModel.commandActions.collectLatest { action ->
                 when (action) {
-                    LauncherCommandAction.TryLockScreen -> if (isDo) runCatching { startLockTask() }
+                    LauncherCommandAction.TryLockScreen -> {
+                        if (isDo) runCatching { startLockTask() }
+                    }
 
                     LauncherCommandAction.BringMdmToFrontAndLock -> {
+                        bringSelfToFrontOnce()
                         if (isDo) {
                             policy.applyLockedContainment(packageName)
                             policy.startLockTaskIfPermitted(this@LauncherActivity)
                         }
-                        bringSelfToFrontOnce()
                     }
 
                     LauncherCommandAction.AllowedAppsUpdated -> {
+                        // Recovery foreground trước để tránh kẹt app cũ (màn xám) khi profile vừa đổi.
+                        bringSelfToFrontOnce()
+                        if (isDo) {
+                            policy.startLockTaskIfPermitted(this@LauncherActivity)
+                        }
                         Toast.makeText(
                             this@LauncherActivity,
                             "Allowed apps updated",
@@ -100,12 +110,13 @@ class LauncherActivity : ComponentActivity() {
 
         setContent {
             val st by viewModel.state.collectAsState()
+
             when (st.lockState) {
                 DeviceLockState.LOCKED -> {
                     UnlockScreen(
                         error = st.unlockError,
                         loading = st.loading,
-                        onUnlock = { viewModel.unlock(this@LauncherActivity, it) }
+                        onUnlock = { password -> viewModel.unlock(this@LauncherActivity, password) }
                     )
                 }
 
@@ -116,7 +127,9 @@ class LauncherActivity : ComponentActivity() {
                         onAppClick = { pkg ->
                             packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
                         },
-                        onClearPersistentHome = { if (isDo) policy.clearPersistentPreferredActivities() },
+                        onClearPersistentHome = {
+                            if (isDo) policy.clearPersistentPreferredActivities()
+                        },
                         onApplyKioskHome = {
                             if (isDo) {
                                 st.config?.let { cfg ->
@@ -157,7 +170,11 @@ class LauncherActivity : ComponentActivity() {
     private fun bringSelfToFrontOnce() {
         startActivity(
             Intent(this, LauncherActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
             }
         )
     }

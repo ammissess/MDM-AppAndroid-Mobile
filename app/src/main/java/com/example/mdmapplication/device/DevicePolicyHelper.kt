@@ -197,12 +197,6 @@ class DevicePolicyHelper(private val context: Context) {
         writeLastManagedPackages(universe)
     }
 
-    //commnet để tắt chức năng khóa debug và safe boot, giúp dễ test khi đang dev
-    // sửa 2 cái trong hàm applyMinimumKioskPolicy và applyFromServerConfig ( cách sửa là bỏ comment)
-    //    setDebuggingDisabled(true)
-    //    setSafeBootDisabled(true)
-
-
     fun applyLockedContainment(launcherPackage: String) {
         enforceAllowedPackages(
             launcherPackage = launcherPackage,
