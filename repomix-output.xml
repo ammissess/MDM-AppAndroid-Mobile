@@ -48,6 +48,7 @@ app/src/androidTest/java/com/example/mdmapplication/ExampleInstrumentedTest.kt
 app/src/main/AndroidManifest.xml
 app/src/main/java/com/example/mdmapplication/data/remote/MdmApi.kt
 app/src/main/java/com/example/mdmapplication/data/remote/MdmDtos.kt
+app/src/main/java/com/example/mdmapplication/device/BootCompletedReceiver.kt
 app/src/main/java/com/example/mdmapplication/device/DevicePolicyHelper.kt
 app/src/main/java/com/example/mdmapplication/device/MyDeviceAdminReceiver.kt
 app/src/main/java/com/example/mdmapplication/MainActivity.kt
@@ -264,13 +265,38 @@ data class LauncherApp(
 <file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LoadingOrErrorScreen.kt">
 package com.example.mdmapplication.ui.launcher
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+
+private val LoadingBgTop = Color(0x3306101E)
+private val LoadingBgMid = Color(0x220A1324)
+private val LoadingBgBottom = Color(0x4403070D)
+private val LoadingGlass = Color(0x99101827)
+private val LoadingBorder = Color.White.copy(alpha = 0.12f)
+private val LoadingText = Color(0xFFF2F7FF)
+private val LoadingMuted = Color(0xFFAAB7CC)
 
 @Composable
 fun LoadingOrErrorScreen(
@@ -278,25 +304,73 @@ fun LoadingOrErrorScreen(
     error: String?,
     onRetry: () -> Unit
 ) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(32.dp)
-        ) {
-            if (loading) {
-                CircularProgressIndicator()
-                Text("Đang kết nối MDM server...")
-            }
+    val title = when {
+        loading -> "Đang tải launcher"
+        error != null -> "Không thể tải launcher"
+        else -> "Đang chuẩn bị launcher"
+    }
 
-            if (error != null) {
-                Text(
-                    text = "❌ $error",
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center
+    val message = when {
+        loading -> "Thiết bị đang đồng bộ trạng thái với MDM server..."
+        error != null -> error
+        else -> "Launcher chưa nhận đủ state để hiển thị danh sách ứng dụng."
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(LoadingBgTop, LoadingBgMid, LoadingBgBottom)
+                    )
                 )
-                Button(onClick = onRetry) {
-                    Text("Thử lại")
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                color = LoadingGlass,
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 460.dp)
+                    .border(1.dp, LoadingBorder, RoundedCornerShape(28.dp))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = title,
+                        color = LoadingText,
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Text(
+                        text = message ?: "Không có thông tin lỗi",
+                        color = if (error != null) Color(0xFFFF9AA6) else LoadingMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+
+                    if (loading) {
+                        CircularProgressIndicator()
+                    }
+
+                    if (!loading) {
+                        Button(onClick = onRetry) {
+                            Text("Thử lại")
+                        }
+                    }
                 }
             }
         }
@@ -307,16 +381,51 @@ fun LoadingOrErrorScreen(
 <file path="app/src/main/java/com/example/mdmapplication/ui/launcher/UnlockScreen.kt">
 package com.example.mdmapplication.ui.launcher
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+
+private val UnlockBgTop = Color(0xCC300A13)
+private val UnlockBgBottom = Color(0xDD070B12)
+private val UnlockGlass = Color(0xB3151C28)
+private val UnlockBorder = Color.White.copy(alpha = 0.12f)
+private val UnlockText = Color(0xFFF2F7FF)
+private val UnlockMuted = Color(0xFFB6C2D2)
+private val UnlockError = Color(0xFFFF9AA6)
 
 @Composable
 fun UnlockScreen(
@@ -326,57 +435,107 @@ fun UnlockScreen(
 ) {
     var password by remember { mutableStateOf("") }
 
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
             modifier = Modifier
-                .padding(32.dp)
-                .fillMaxWidth()
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(UnlockBgTop, Color(0xAA101827), UnlockBgBottom)
+                    )
+                )
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            Surface(
+                color = UnlockGlass,
+                shape = RoundedCornerShape(30.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 460.dp)
+                    .border(1.dp, UnlockBorder, RoundedCornerShape(30.dp))
             ) {
-                Text(
-                    text = "🔒 Thiết bị bị khóa",
-                    style = MaterialTheme.typography.titleLarge,
-                    textAlign = TextAlign.Center
-                )
-
-                Text(
-                    text = "Liên hệ quản trị viên để lấy mã mở khóa",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Mật khẩu mở khóa") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    singleLine = true,
-                    isError = error != null,
-                    supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Button(
-                    onClick = { onUnlock(password) },
-                    enabled = password.isNotBlank() && !loading,
-                    modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    if (loading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
+                    Text(
+                        text = "Thiết bị đang bị khóa",
+                        color = UnlockText,
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Text(
+                        text = "Chính sách MDM đã chặn sử dụng launcher. Chỉ quản trị viên mới có thể cung cấp mã mở khóa.",
+                        color = UnlockMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Mật khẩu mở khóa") },
+                        singleLine = true,
+                        isError = error != null,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.White.copy(alpha = 0.05f),
+                            unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+                            disabledContainerColor = Color.White.copy(alpha = 0.05f),
+                            errorContainerColor = Color.White.copy(alpha = 0.05f),
+                            focusedTextColor = UnlockText,
+                            unfocusedTextColor = UnlockText,
+                            focusedLabelColor = UnlockMuted,
+                            unfocusedLabelColor = UnlockMuted,
+                            cursorColor = Color(0xFF7CCBFF),
+                            focusedIndicatorColor = Color(0xFF7CCBFF),
+                            unfocusedIndicatorColor = Color.White.copy(alpha = 0.18f),
+                            errorIndicatorColor = UnlockError,
+                            errorLabelColor = UnlockError
                         )
-                    } else {
-                        Text("Mở khóa")
+                    )
+
+                    if (error != null) {
+                        Text(
+                            text = error,
+                            color = UnlockError,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Button(
+                        onClick = { onUnlock(password) },
+                        enabled = password.isNotBlank() && !loading,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF7CCBFF),
+                            contentColor = Color(0xFF07111E)
+                        )
+                    ) {
+                        if (loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF07111E)
+                            )
+                        } else {
+                            Text("Mở khóa thiết bị")
+                        }
                     }
                 }
             }
@@ -774,6 +933,16 @@ fun Context.readBatteryInfo(): BatteryInfo {
 <resources>
 
     <style name="Theme.MDMApplication" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <style name="Theme.MDMApplication.Launcher" parent="Theme.MDMApplication">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowShowWallpaper">true</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+
 </resources>
 </file>
 
@@ -1284,706 +1453,36 @@ dependencies {
 }
 </file>
 
-<file path="app/src/main/java/com/example/mdmapplication/data/remote/MdmApi.kt">
-package com.example.mdmapplication.data.remote
-
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.HttpResponse
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
-import io.ktor.serialization.kotlinx.json.json
-import kotlinx.serialization.json.Json
-
-class MdmApi(private val baseUrl: String) {
-
-//    private val client = HttpClient(CIO) {
-//        install(ContentNegotiation) {
-//            json(Json {
-//                ignoreUnknownKeys = true
-//                isLenient = true
-//            })
-//        }
-//    }
-
-    //khi backend trả 423 + {error,status}, Android đọc được để set UI state đúng.
-    private val client = HttpClient(CIO) {
-        expectSuccess = false
-        install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
-    }
-
-
-    private suspend inline fun <reified T> HttpResponse.bodyOrThrow(): T {
-        if (status.isSuccess()) return body()
-        val err = runCatching { body<ApiErrorResponse>() }.getOrNull()
-        throw ApiException(
-            httpCode = status.value,
-            backendStatus = err?.status,
-            message = err?.error ?: "HTTP ${status.value}"
-        )
-    }
-    class ApiException(
-        val httpCode: Int,
-        val backendStatus: String? = null,
-        override val message: String
-    ) : Exception(message)
-
-    // ===== AUTH =====
-/*
-    suspend fun login(username: String, password: String): LoginResponse =
-        client.post("$baseUrl/api/auth/login") {
-            contentType(ContentType.Application.Json)
-            setBody(LoginRequest(username, password))
-        }.bodyOrThrow()
-*/
-
-    // ===== AUTH =====
-    suspend fun login(username: String, password: String, deviceCode: String? = null): LoginResponse =
-        client.post("$baseUrl/api/auth/login") {
-            contentType(ContentType.Application.Json)
-            setBody(LoginRequest(username, password, deviceCode))
-        }.bodyOrThrow()
-
-    // ===== USAGE (BATCH) =====
-    suspend fun reportUsageBatch(token: String, req: UsageBatchReportRequest): UsageBatchReportResponse =
-        client.post("$baseUrl/api/device/usage/batch") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.bodyOrThrow()
-
-// (tuỳ chọn) bỏ reportUsage cũ hoặc giữ nhưng không dùng nữa
-// suspend fun reportUsage(...) { ... }  // backend đã bỏ /usage
-
-    // ===== COMMANDS =====
-    suspend fun pollCommands(token: String, req: DevicePollCommandsRequest): DevicePollCommandsResponse =
-        client.post("$baseUrl/api/device/poll") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.bodyOrThrow()
-
-    suspend fun ackCommand(token: String, req: DeviceAckCommandRequest): DeviceAckCommandResponse =
-        client.post("$baseUrl/api/device/ack") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.bodyOrThrow()
-
-    // ===== DEVICE =====
-    suspend fun registerDevice(token: String, req: DeviceRegisterRequest): DeviceRegisterResponse =
-        client.post("$baseUrl/api/device/register") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.bodyOrThrow()
-
-    suspend fun unlockDevice(token: String, req: DeviceUnlockRequest): DeviceUnlockResponse =
-        client.post("$baseUrl/api/device/unlock") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.bodyOrThrow()
-
-    // deviceCode bắt buộc theo backend mới
-    suspend fun fetchConfig(token: String, userCode: String, deviceCode: String): DeviceConfigResponse =
-        client.get("$baseUrl/api/device/config/$userCode?deviceCode=$deviceCode") {
-            header("Authorization", "Bearer $token")
-        }.bodyOrThrow()
-
-    suspend fun updateLocation(token: String, req: LocationUpdateRequest) =
-        client.post("$baseUrl/api/device/location") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.body<Map<String, Boolean>>()
-
-    suspend fun reportUsage(token: String, req: UsageReportRequest) =
-        client.post("$baseUrl/api/device/usage") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.body<Map<String, Boolean>>()
-
-    suspend fun sendEvent(token: String, deviceCode: String, req: DeviceEventRequest) =
-        client.post("$baseUrl/api/device/$deviceCode/events") {
-            header("Authorization", "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }.body<Map<String, Boolean>>()
-}
-</file>
-
-<file path="app/src/main/java/com/example/mdmapplication/data/remote/MdmDtos.kt">
-package com.example.mdmapplication.data.remote
-
-import kotlinx.serialization.Serializable
-
-@Serializable
-data class LoginRequest(
-    val username: String,
-     val password: String,
-     val deviceCode: String? = null,
-    )
-
-@Serializable
-data class LoginResponse(
-    val token: String,
-    val expiresAtEpochMillis: Long,
-    val role: String
-)
-// giữ LoginResponse như cũ
-
-@Serializable
-data class UsageBatchReportRequest(
-    val deviceCode: String,
-    val items: List<UsageItem>,
-) {
-    @Serializable
-    data class UsageItem(
-        val packageName: String,
-        val startedAtEpochMillis: Long,
-        val endedAtEpochMillis: Long,
-        val durationMs: Long,
-    )
-}
-
-@Serializable
-data class UsageBatchReportResponse(
-    val ok: Boolean,
-    val inserted: Int,
-)
-
-
-// ✅ Commands (match backend CommandDtos)
-@Serializable
-data class DevicePollCommandsRequest(
-    val deviceCode: String,
-    val limit: Int = 1,
-)
-
-@Serializable
-data class DevicePollCommandsResponse(
-    val commands: List<DeviceLeasedCommand>,
-    val serverTimeEpochMillis: Long,
-)
-
-@Serializable
-data class DeviceLeasedCommand(
-    val id: String,
-    val type: String,
-    val payload: String,
-    val status: String,
-    val leaseToken: String,
-    val leaseExpiresAtEpochMillis: Long,
-    val createdAtEpochMillis: Long,
-)
-
-@Serializable
-data class DeviceAckCommandRequest(
-    val deviceCode: String,
-    val commandId: String,
-    val leaseToken: String,
-    val result: String, // SUCCESS|FAILED
-    val error: String? = null,
-    val output: String? = null,
-)
-
-@Serializable
-data class DeviceAckCommandResponse(
-    val ok: Boolean,
-    val status: String,
-)
-/**
- * Đồng bộ theo backend DeviceRegisterRequest
- */
-@Serializable
-data class DeviceRegisterRequest(
-    val deviceCode: String,
-
-    // thiết bị
-    val androidVersion: String = "",
-    val sdkInt: Int = 0,
-    val manufacturer: String = "",
-    val model: String = "",
-    val imei: String = "",
-    val serial: String = "",
-
-    // trạng thái tạm để test
-    val batteryLevel: Int = -1,
-    val isCharging: Boolean = false,
-    val wifiEnabled: Boolean = false
-)
-
-/**
- * Đồng bộ theo backend DeviceRegisterResponse
- */
-@Serializable
-data class DeviceRegisterResponse(
-    val deviceId: String,
-    val deviceCode: String,
-    val status: String,           // ACTIVE / LOCKED
-    val message: String? = null
-)
-
-/**
- * Đồng bộ theo backend DeviceConfigResponse
- */
-@Serializable
-data class DeviceConfigResponse(
-    val userCode: String,
-    val allowedApps: List<String> = emptyList(),
-
-    val disableWifi: Boolean = false,
-    val disableBluetooth: Boolean = false,
-    val disableCamera: Boolean = false,
-    val disableStatusBar: Boolean = false,
-    val kioskMode: Boolean = false,
-    val blockUninstall: Boolean = false,
-
-    val showWifi: Boolean = true,
-    val showBluetooth: Boolean = true,
-
-    val configVersionEpochMillis: Long = 0
-)
-
-// ===== Missing DTOs (đang làm bạn lỗi compile) =====
-
-@Serializable
-data class DeviceUnlockRequest(
-    val deviceCode: String,
-    val password: String
-)
-
-@Serializable
-data class DeviceUnlockResponse(
-    val status: String,   // ACTIVE / LOCKED
-    val message: String
-)
-
-@Serializable
-data class LocationUpdateRequest(
-    val deviceCode: String,
-    val latitude: Double,
-    val longitude: Double,
-    val accuracyMeters: Double = 0.0
-)
-
-@Serializable
-data class UsageReportRequest(
-    val deviceCode: String,
-    val packageName: String,
-    val startedAtEpochMillis: Long,
-    val endedAtEpochMillis: Long,
-    val durationMs: Long
-)
-
-@Serializable
-data class DeviceEventRequest(
-    val type: String,
-    val payload: String = "{}"
-)
-
-@Serializable
-data class ApiErrorResponse(
-    val error: String? = null,
-    val status: String? = null
-)
-</file>
-
-<file path="app/src/main/java/com/example/mdmapplication/device/DevicePolicyHelper.kt">
-/*
-//package com.example.mdmapplication.device
-//
-//import android.app.admin.DevicePolicyManager
-//import android.content.ComponentName
-//import android.content.Context
-//import android.content.Intent
-//import android.content.IntentFilter
-//import com.example.mdmapplication.ui.launcher.LauncherActivity
-//
-//class DevicePolicyHelper(private val context: Context) {
-//
-//    private val dpm =
-//        context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-//
-//    private val admin =
-//        ComponentName(context, MyDeviceAdminReceiver::class.java)
-//
-//    fun enableKiosk(packageName: String) {
-//        dpm.setLockTaskPackages(admin, arrayOf(packageName))
-//    }
-//
-//    fun blockUninstall(pkg: String) {
-//        dpm.setUninstallBlocked(admin, pkg, true)
-//    }
-//
-//    fun disableStatusBar() {
-//        dpm.setStatusBarDisabled(admin, true)
-//    }
-//
-//    /** Đóng đinh HOME về LauncherActivity của app (persistent) */
-//    fun setPersistentHomeToLauncher() {
-//        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
-//            addCategory(Intent.CATEGORY_HOME)
-//            addCategory(Intent.CATEGORY_DEFAULT)
-//        }
-//        val launcher = ComponentName(context, LauncherActivity::class.java)
-//        dpm.addPersistentPreferredActivity(admin, filter, launcher)
-//    }
-//
-//    /** Gỡ tất cả persistent preferred activities mà app này đã set */
-//    fun clearPersistentPreferredActivities() {
-//        // Gỡ persistent preferred activities cho chính package của app
-//        dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
-//    }
-//
-//    /** Gói thao tác "apply kiosk + set home + block uninstall" */
-//    fun applyKioskAsHome(packageName: String) {
-//        setPersistentHomeToLauncher()
-//        enableKiosk(packageName)
-//        blockUninstall(packageName)
-//    }
-//}
-*/
-
-//code cu phia tren chay mdm cu, de ket noi toi backend can nang cap
-//DevicePolicyHelper để apply policy từ backend
-
+<file path="app/src/main/java/com/example/mdmapplication/device/BootCompletedReceiver.kt">
 package com.example.mdmapplication.device
 
-import android.app.admin.DevicePolicyManager
-import android.content.ComponentName
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.os.UserManager
 import com.example.mdmapplication.ui.launcher.LauncherActivity
 
-class DevicePolicyHelper(private val context: Context) {
+class BootCompletedReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_LOCKED_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                val policy = DevicePolicyHelper(context)
 
-    private val dpm =
-        context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-
-    private val userManager =
-        context.getSystemService(Context.USER_SERVICE) as UserManager
-
-    private val admin =
-        ComponentName(context, MyDeviceAdminReceiver::class.java)
-
-    /** Allow lock-task for packages (launcher + allowed apps) */
-    fun setLockTaskPackages(packages: Array<String>) {
-        dpm.setLockTaskPackages(admin, packages)
-    }
-
-    fun blockUninstall(pkg: String) {
-        dpm.setUninstallBlocked(admin, pkg, true)
-    }
-
-    fun disableStatusBar(disabled: Boolean) {
-        dpm.setStatusBarDisabled(admin, disabled)
-    }
-
-    private fun setUserRestriction(key: String, disabled: Boolean) {
-        if (disabled) dpm.addUserRestriction(admin, key)
-        else dpm.clearUserRestriction(admin, key)
-    }
-
-    fun setWifiDisabled(disabled: Boolean) {
-        setUserRestriction(UserManager.DISALLOW_CONFIG_WIFI, disabled)
-    }
-
-    fun setBluetoothDisabled(disabled: Boolean) {
-        setUserRestriction(UserManager.DISALLOW_BLUETOOTH, disabled)
-    }
-
-    fun setCameraDisabled(disabled: Boolean) {
-        dpm.setCameraDisabled(admin, disabled)
-    }
-
-    /** Đóng đinh HOME về LauncherActivity của app (persistent) */
-    fun setPersistentHomeToLauncher() {
-        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_HOME)
-            addCategory(Intent.CATEGORY_DEFAULT)
-        }
-        val launcher = ComponentName(context, LauncherActivity::class.java)
-        dpm.addPersistentPreferredActivity(admin, filter, launcher)
-    }
-
-    fun clearPersistentPreferredActivities() {
-        dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
-    }
-
-    /** Apply policy từ server */
-    fun applyFromServerConfig(
-        launcherPackage: String,
-        allowedApps: List<String>,
-        kioskMode: Boolean,
-        disableStatusBar: Boolean,
-        blockUninstall: Boolean,
-        disableWifi: Boolean,
-        disableBluetooth: Boolean,
-        disableCamera: Boolean
-    ) {
-        // HOME
-        setPersistentHomeToLauncher()
-
-        // Lock task allowlist = launcher + allowed packages
-        val lockPackages = (listOf(launcherPackage) + allowedApps).distinct().toTypedArray()
-        setLockTaskPackages(lockPackages)
-
-        // Uninstall + statusbar
-        if (blockUninstall) blockUninstall(launcherPackage)
-        disableStatusBar(disableStatusBar)
-
-        // restrictions
-        setWifiDisabled(disableWifi)
-        setBluetoothDisabled(disableBluetooth)
-        setCameraDisabled(disableCamera)
-
-        // kioskMode => activity sẽ gọi startLockTask() (vì cần Activity context)
-    }
-}
-</file>
-
-<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherActivity.kt">
-package com.example.mdmapplication.ui.launcher
-
-import android.app.admin.DevicePolicyManager
-import android.content.Context
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.viewModels
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import com.example.mdmapplication.BuildConfig
-import com.example.mdmapplication.device.DevicePolicyHelper
-import kotlinx.coroutines.flow.collectLatest
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
-
-class LauncherActivity : ComponentActivity() {
-
-    private val viewModel: LauncherViewModel by viewModels()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val policy = DevicePolicyHelper(this)
-        val isDo = dpm.isDeviceOwnerApp(packageName)
-
-        if (isDo && BuildConfig.DEBUG) {
-            policy.clearPersistentPreferredActivities()
-        }
-
-        // Fetch từ backend khi khởi động
-        viewModel.refreshFromBackend(this)
-
-        // Apply policy khi config thay đổi
-        lifecycleScope.launch {
-            viewModel.state.collectLatest { st ->
-                val cfg = st.config ?: return@collectLatest
-                if (!isDo) return@collectLatest
-
-                policy.applyFromServerConfig(
-                    launcherPackage = packageName,
-                    allowedApps = cfg.allowedApps,
-                    kioskMode = cfg.kioskMode,
-                    disableStatusBar = cfg.disableStatusBar,
-                    blockUninstall = cfg.blockUninstall,
-                    disableWifi = cfg.disableWifi,
-                    disableBluetooth = cfg.disableBluetooth,
-                    disableCamera = cfg.disableCamera
+                // Chỉ re-assert policy tối thiểu; KHÔNG ép locked containment vô điều kiện ở boot.
+                policy.applyMinimumKioskPolicy(
+                    launcherPackage = context.packageName,
+                    allowedApps = emptyList()
                 )
 
-                if (cfg.kioskMode && !BuildConfig.DEBUG) {
-                    try { startLockTask() } catch (_: Throwable) {}
-                }
-            }
-        }
-
-        setContent {
-            val st by viewModel.state.collectAsState()
-
-            when (st.lockState) {
-                DeviceLockState.LOCKED -> {
-                    // Hiện màn hình nhập mật khẩu unlock
-                    UnlockScreen(
-                        error = st.unlockError,
-                        loading = st.loading,
-                        onUnlock = { password ->
-                            viewModel.unlock(this@LauncherActivity, password)
-                        }
+                val launch = Intent(context, LauncherActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP
                     )
                 }
-                DeviceLockState.ACTIVE -> {
-                    LauncherScreen(
-                        apps = st.apps,
-                        isDeviceOwner = isDo,
-                        onAppClick = { pkg ->
-                            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
-                        },
-                        onClearPersistentHome = {
-                            if (isDo) policy.clearPersistentPreferredActivities()
-                        },
-                        onApplyKioskHome = {
-                            if (isDo) {
-                                st.config?.let { cfg ->
-                                    policy.applyFromServerConfig(
-                                        launcherPackage = packageName,
-                                        allowedApps = cfg.allowedApps,
-                                        kioskMode = cfg.kioskMode,
-                                        disableStatusBar = cfg.disableStatusBar,
-                                        blockUninstall = cfg.blockUninstall,
-                                        disableWifi = cfg.disableWifi,
-                                        disableBluetooth = cfg.disableBluetooth,
-                                        disableCamera = cfg.disableCamera
-                                    )
-                                }
-                            }
-                        },
-                        onExitLockTask = { try { stopLockTask() } catch (_: Throwable) {} }
-                    )
-                }
-                DeviceLockState.UNKNOWN -> {
-                    // Màn hình loading / lỗi
-                    LoadingOrErrorScreen(
-                        loading = st.loading,
-                        error = st.error,
-                        onRetry = { viewModel.refreshFromBackend(this@LauncherActivity) }
-                    )
-                }
-            }
-        }
-    }
-}
-</file>
-
-<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherScreen.kt">
-package com.example.mdmapplication.ui.launcher
-
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import com.example.mdmapplication.BuildConfig
-import com.example.mdmapplication.model.LauncherApp
-import com.google.accompanist.drawablepainter.rememberDrawablePainter
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LauncherScreen(
-    apps: List<LauncherApp>,
-    isDeviceOwner: Boolean,
-    onAppClick: (String) -> Unit,
-    onClearPersistentHome: () -> Unit,
-    onApplyKioskHome: () -> Unit,
-    onExitLockTask: () -> Unit
-) {
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("MDM Launcher") }) }
-    ) { padding ->
-
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-        ) {
-
-            // ===== DEBUG CONTROL PANEL =====
-            if (BuildConfig.DEBUG) {
-                Card(
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Dev Control Panel",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(Modifier.height(8.dp))
-
-                        Text(
-                            text = if (isDeviceOwner) "Device Owner: YES" else "Device Owner: NO",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onClearPersistentHome,
-                                enabled = isDeviceOwner
-                            ) {
-                                Text("Clear HOME")
-                            }
-                            Button(
-                                onClick = onApplyKioskHome,
-                                enabled = isDeviceOwner
-                            ) {
-                                Text("Apply Kiosk+HOME")
-                            }
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = onExitLockTask) {
-                                Text("Exit LockTask")
-                            }
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "Tip: Clear HOME giúp Android Studio kill/re-run dễ hơn.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-
-            // ===== APP GRID =====
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier
-                    .padding(horizontal = 16.dp)
-                    .fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 16.dp)
-            ) {
-                items(apps) { app ->
-                    Column(
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .fillMaxWidth()
-                            .clickable { onAppClick(app.packageName) },
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Image(
-                            painter = rememberDrawablePainter(app.icon),
-                            contentDescription = app.label,
-                            modifier = Modifier.size(64.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(app.label)
-                    }
-                }
+                runCatching { context.startActivity(launch) }
             }
         }
     }
@@ -2030,7 +1529,6 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- query theo intent LAUNCHER xu ly mat hien thi chrome -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -2038,22 +1536,13 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
         </intent>
     </queries>
 
-
-    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!-- Battery info -->
-    <!--    <uses-permission android:name="android.permission.BATTERY_STATS" /> -->
-    <!-- xoa, vì không Không được cấp → để lại chỉ gây nhiễu warning.,Không giúp gì cho use-case “pin level / charging”.  -->
-           <!-- WiFi info -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-
-    <!-- Location (GPS gửi lên backend) -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Usage stats (theo dõi thời gian dùng app) -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
@@ -2079,7 +1568,10 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 
         <activity
             android:name=".ui.launcher.LauncherActivity"
-            android:exported="true">
+            android:exported="true"
+            android:lockTaskMode="if_whitelisted"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MDMApplication.Launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
@@ -2099,9 +1591,1196 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".device.BootCompletedReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/data/remote/MdmApi.kt">
+package com.example.mdmapplication.data.remote
+
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
+
+class MdmApi(private val baseUrl: String) {
+
+    private val client = HttpClient(CIO) {
+        expectSuccess = false
+        install(ContentNegotiation) {
+            json(
+                Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                }
+            )
+        }
+    }
+
+    class ApiException(
+        val httpCode: Int,
+        val backendStatus: String? = null,
+        val backendCode: String? = null,
+        override val message: String
+    ) : Exception(message)
+
+    private suspend inline fun <reified T> HttpResponse.bodyOrThrow(): T {
+        if (status.isSuccess()) return body()
+
+        val err = runCatching { body<ApiErrorResponse>() }.getOrNull()
+        throw ApiException(
+            httpCode = status.value,
+            backendStatus = err?.status,
+            backendCode = err?.code,
+            message = err?.error ?: "HTTP ${status.value}"
+        )
+    }
+
+    suspend fun login(username: String, password: String, deviceCode: String): LoginResponse =
+        client.post("$baseUrl/api/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody(LoginRequest(username = username, password = password, deviceCode = deviceCode))
+        }.bodyOrThrow()
+
+    suspend fun registerDevice(token: String, req: DeviceRegisterRequest): DeviceRegisterResponse =
+        client.post("$baseUrl/api/device/register") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun unlockDevice(token: String, req: DeviceUnlockRequest): DeviceUnlockResponse =
+        client.post("$baseUrl/api/device/unlock") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun fetchCurrentConfig(token: String, deviceCode: String): DeviceConfigResponse =
+        client.get("$baseUrl/api/device/config/current") {
+            header("Authorization", "Bearer $token")
+            parameter("deviceCode", deviceCode)
+        }.bodyOrThrow()
+
+    suspend fun updateLocation(token: String, req: LocationUpdateRequest): Map<String, Boolean> =
+        client.post("$baseUrl/api/device/location") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun reportUsage(token: String, req: UsageReportRequest): Map<String, Boolean> =
+        client.post("$baseUrl/api/device/usage") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun reportUsageBatch(token: String, req: UsageBatchReportRequest): UsageBatchReportResponse =
+        client.post("$baseUrl/api/device/usage/batch") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun sendEvent(token: String, deviceCode: String, req: DeviceEventRequest): Map<String, Boolean> =
+        client.post("$baseUrl/api/device/$deviceCode/events") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun pollCommands(token: String, req: DevicePollCommandsRequest): DevicePollCommandsResponse =
+        client.post("$baseUrl/api/device/poll") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun ackCommand(token: String, req: DeviceAckCommandRequest): DeviceAckCommandResponse =
+        client.post("$baseUrl/api/device/ack") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/data/remote/MdmDtos.kt">
+package com.example.mdmapplication.data.remote
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class LoginRequest(
+    val username: String,
+    val password: String,
+    val deviceCode: String? = null
+)
+
+@Serializable
+data class LoginResponse(
+    val token: String,
+    val expiresAtEpochMillis: Long,
+    val role: String
+)
+
+@Serializable
+data class DeviceRegisterRequest(
+    val deviceCode: String,
+    val androidVersion: String = "",
+    val sdkInt: Int = 0,
+    val manufacturer: String = "",
+    val model: String = "",
+    val imei: String = "",
+    val serial: String = "",
+    val batteryLevel: Int = -1,
+    val isCharging: Boolean = false,
+    val wifiEnabled: Boolean = false
+)
+
+@Serializable
+data class DeviceRegisterResponse(
+    val deviceId: String,
+    val deviceCode: String,
+    val status: String,
+    val message: String? = null
+)
+
+@Serializable
+data class DeviceUnlockRequest(
+    val deviceCode: String,
+    val password: String
+)
+
+@Serializable
+data class DeviceUnlockResponse(
+    val status: String,
+    val message: String
+)
+
+@Serializable
+data class DeviceConfigResponse(
+    val userCode: String,
+    val allowedApps: List<String>,
+    val disableWifi: Boolean,
+    val disableBluetooth: Boolean,
+    val disableCamera: Boolean,
+    val disableStatusBar: Boolean,
+    val kioskMode: Boolean,
+    val blockUninstall: Boolean,
+    val showWifi: Boolean = false,
+    val showBluetooth: Boolean = false,
+    val configVersionEpochMillis: Long
+)
+
+@Serializable
+data class LocationUpdateRequest(
+    val deviceCode: String,
+    val latitude: Double,
+    val longitude: Double,
+    val accuracyMeters: Double = 0.0
+)
+
+@Serializable
+data class UsageReportRequest(
+    val deviceCode: String,
+    val packageName: String,
+    val startedAtEpochMillis: Long,
+    val endedAtEpochMillis: Long,
+    val durationMs: Long
+)
+
+@Serializable
+data class UsageBatchReportRequest(
+    val deviceCode: String,
+    val items: List<UsageItem>
+) {
+    @Serializable
+    data class UsageItem(
+        val packageName: String,
+        val startedAtEpochMillis: Long,
+        val endedAtEpochMillis: Long,
+        val durationMs: Long
+    )
+}
+
+@Serializable
+data class UsageBatchReportResponse(
+    val ok: Boolean,
+    val inserted: Int
+)
+
+@Serializable
+data class DeviceEventRequest(
+    val type: String,
+    val payload: String = "{}"
+)
+
+@Serializable
+data class DevicePollCommandsRequest(
+    val deviceCode: String,
+    val limit: Int = 1
+)
+
+@Serializable
+data class DevicePollCommandsResponse(
+    val commands: List<DeviceLeasedCommand>,
+    val serverTimeEpochMillis: Long
+)
+
+@Serializable
+data class DeviceLeasedCommand(
+    val id: String,
+    val type: String,
+    val payload: String,
+    val status: String,
+    val leaseToken: String,
+    val leaseExpiresAtEpochMillis: Long,
+    val createdAtEpochMillis: Long,
+    val expiresAtEpochMillis: Long? = null
+)
+
+@Serializable
+data class DeviceAckCommandRequest(
+    val deviceCode: String,
+    val commandId: String,
+    val leaseToken: String,
+    val result: String,
+    val error: String? = null,
+    val errorCode: String? = null,
+    val output: String? = null
+)
+
+@Serializable
+data class DeviceAckCommandResponse(
+    val ok: Boolean,
+    val status: String
+)
+
+@Serializable
+data class ApiErrorResponse(
+    val error: String? = null,
+    val status: String? = null,
+    val code: String? = null
+)
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/device/DevicePolicyHelper.kt">
+package com.example.mdmapplication.device
+
+import android.app.Activity
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.UserManager
+import android.util.Log
+import android.view.inputmethod.InputMethodManager
+import com.example.mdmapplication.ui.launcher.LauncherActivity
+
+class DevicePolicyHelper(private val context: Context) {
+
+    private val dpm =
+        context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+    private val admin =
+        ComponentName(context, MyDeviceAdminReceiver::class.java)
+
+    private val prefs = context.getSharedPreferences("mdm_policy_prefs", Context.MODE_PRIVATE)
+    private val KEY_LAST_MANAGED = "last_managed_packages"
+
+    private val tag = "DevicePolicyHelper"
+    private val selfPackage: String = context.packageName
+
+    private fun isSelfPackage(packageName: String): Boolean = packageName == selfPackage
+
+    private fun packageExists(pm: PackageManager, pkg: String): Boolean =
+        runCatching { pm.getApplicationInfo(pkg, 0); true }.getOrDefault(false)
+
+    private fun restorePackage(packageName: String) {
+        if (packageName.isBlank()) return
+        runCatching { dpm.setApplicationHidden(admin, packageName, false) }
+            .onFailure { Log.w(tag, "restorePackage unhide failed package=$packageName", it) }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            runCatching { dpm.setPackagesSuspended(admin, arrayOf(packageName), false) }
+                .onFailure { Log.w(tag, "restorePackage unsuspend failed package=$packageName", it) }
+        }
+    }
+
+    private fun restorePackages(packages: Collection<String>) {
+        packages.forEach { restorePackage(it) }
+    }
+
+    private fun restoreSelfBeforePolicy() {
+        restorePackage(selfPackage)
+        Log.i(tag, "restoreSelfBeforePolicy done selfPackage=$selfPackage")
+    }
+
+    private fun removeSelfFromSet(source: Set<String>): Set<String> = source.filterNot(::isSelfPackage).toSet()
+
+    fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(selfPackage)
+
+    fun setLockTaskPackages(packages: Array<String>) {
+        restoreSelfBeforePolicy()
+        runCatching { dpm.setLockTaskPackages(admin, packages.distinct().toTypedArray()) }
+            .onFailure { Log.w(tag, "setLockTaskPackages failed", it) }
+    }
+
+    fun blockUninstall(pkg: String) {
+        runCatching { dpm.setUninstallBlocked(admin, pkg, true) }
+            .onFailure { Log.w(tag, "blockUninstall failed for $pkg", it) }
+    }
+
+    fun disableStatusBar(disabled: Boolean) {
+        runCatching { dpm.setStatusBarDisabled(admin, disabled) }
+            .onFailure { Log.w(tag, "disableStatusBar failed disabled=$disabled", it) }
+    }
+
+    private fun setUserRestriction(key: String, disabled: Boolean) {
+        runCatching {
+            if (disabled) dpm.addUserRestriction(admin, key)
+            else dpm.clearUserRestriction(admin, key)
+        }.onFailure { Log.w(tag, "setUserRestriction failed key=$key disabled=$disabled", it) }
+    }
+
+    fun setWifiDisabled(disabled: Boolean) = setUserRestriction(UserManager.DISALLOW_CONFIG_WIFI, disabled)
+    fun setBluetoothDisabled(disabled: Boolean) = setUserRestriction(UserManager.DISALLOW_BLUETOOTH, disabled)
+
+    fun setCameraDisabled(disabled: Boolean) {
+        runCatching { dpm.setCameraDisabled(admin, disabled) }
+            .onFailure { Log.w(tag, "setCameraDisabled failed disabled=$disabled", it) }
+    }
+
+    fun setDebuggingDisabled(disabled: Boolean) = setUserRestriction(UserManager.DISALLOW_DEBUGGING_FEATURES, disabled)
+    fun setSafeBootDisabled(disabled: Boolean) = setUserRestriction(UserManager.DISALLOW_SAFE_BOOT, disabled)
+
+    fun setPersistentHomeToLauncher() {
+        restoreSelfBeforePolicy()
+        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+        val launcher = ComponentName(context, LauncherActivity::class.java)
+        runCatching { dpm.addPersistentPreferredActivity(admin, filter, launcher) }
+            .onFailure { Log.w(tag, "setPersistentHomeToLauncher failed", it) }
+    }
+
+    fun clearPersistentPreferredActivities() {
+        runCatching { dpm.clearPackagePersistentPreferredActivities(admin, selfPackage) }
+            .onFailure { Log.w(tag, "clearPersistentPreferredActivities failed", it) }
+    }
+
+    fun applyMinimumKioskPolicy(
+        launcherPackage: String,
+        allowedApps: List<String> = emptyList(),
+        disableDebugging: Boolean = false,
+        disableSafeBoot: Boolean = false
+    ) {
+        if (!isDeviceOwner()) return
+        restoreSelfBeforePolicy()
+        setPersistentHomeToLauncher()
+        setLockTaskPackages((listOf(launcherPackage, selfPackage) + allowedApps).distinct().toTypedArray())
+        applyLockTaskFeatures(kioskMode = true, lockedMode = false)
+        setDebuggingDisabled(disableDebugging)
+        setSafeBootDisabled(disableSafeBoot)
+    }
+
+    fun applyFromServerConfig(
+        launcherPackage: String,
+        allowedApps: List<String>,
+        kioskMode: Boolean,
+        disableStatusBar: Boolean,
+        blockUninstall: Boolean,
+        disableWifi: Boolean,
+        disableBluetooth: Boolean,
+        disableCamera: Boolean
+    ) {
+        if (!isDeviceOwner()) return
+        restoreSelfBeforePolicy()
+        setPersistentHomeToLauncher()
+        setLockTaskPackages((listOf(launcherPackage, selfPackage) + allowedApps).distinct().toTypedArray())
+        applyLockTaskFeatures(kioskMode = kioskMode, lockedMode = false)
+
+        if (blockUninstall) blockUninstall(selfPackage)
+        disableStatusBar(disableStatusBar)
+        setWifiDisabled(disableWifi)
+        setBluetoothDisabled(disableBluetooth)
+        setCameraDisabled(disableCamera)
+
+        setDebuggingDisabled(false)
+        setSafeBootDisabled(false)
+    }
+
+    private fun applyLockTaskFeatures(kioskMode: Boolean, lockedMode: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        runCatching {
+            val flags = when {
+                !kioskMode -> DevicePolicyManager.LOCK_TASK_FEATURE_HOME
+                lockedMode -> DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
+                        DevicePolicyManager.LOCK_TASK_FEATURE_OVERVIEW or
+                        DevicePolicyManager.LOCK_TASK_FEATURE_NOTIFICATIONS
+                else -> DevicePolicyManager.LOCK_TASK_FEATURE_NONE
+            }
+            dpm.setLockTaskFeatures(admin, flags)
+        }.onFailure {
+            Log.w(tag, "applyLockTaskFeatures failed kioskMode=$kioskMode lockedMode=$lockedMode", it)
+        }
+    }
+
+    private fun launchablePackages(pm: PackageManager): Set<String> {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return pm.queryIntentActivities(intent, 0)
+            .mapNotNull { it.activityInfo?.packageName }
+            .toSet()
+    }
+
+    private fun enabledImePackages(): Set<String> {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            ?: return emptySet()
+        return runCatching {
+            imm.enabledInputMethodList.mapNotNull { it.packageName }.toSet()
+        }.getOrElse {
+            Log.w(tag, "enabledImePackages failed", it)
+            emptySet()
+        }
+    }
+
+    private fun minimumSystemSafelist(pm: PackageManager): Set<String> {
+        val candidates = setOf(
+            "com.android.systemui",
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller",
+            "com.android.packageinstaller",
+            "com.google.android.packageinstaller",
+            "com.android.documentsui",
+            "com.android.providers.downloads",
+            "com.android.providers.downloads.ui",
+            "com.android.providers.media",
+            "com.android.externalstorage",
+            "com.android.webview",
+            "com.google.android.webview",
+            "com.google.android.gms",
+            "com.google.android.gsf",
+            "com.android.settings",
+            "com.android.providers.settings",
+            "com.android.launcher3"
+        )
+        return candidates.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
+    }
+
+    private fun readLastManagedPackages(): Set<String> =
+        prefs.getStringSet(KEY_LAST_MANAGED, emptySet())?.toSet() ?: emptySet()
+
+    private fun writeLastManagedPackages(packages: Set<String>) {
+        prefs.edit().putStringSet(KEY_LAST_MANAGED, packages).apply()
+    }
+
+    private fun manageableCandidates(
+        currentLaunchables: Set<String>,
+        previousManaged: Set<String>,
+        keep: Set<String>
+    ): Set<String> {
+        return (currentLaunchables + previousManaged + keep)
+            .filterNot(::isSelfPackage)
+            .toSet()
+    }
+
+    private fun nonCoreSystemPackages(pm: PackageManager, packages: Set<String>): Set<String> {
+        return packages.filterTo(mutableSetOf()) { pkg ->
+            if (isSelfPackage(pkg)) return@filterTo false
+            val info = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull() ?: return@filterTo false
+            val isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                    (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            !isSystem
+        }
+    }
+
+    fun preparePackageForLaunch(packageName: String) {
+        if (!isDeviceOwner()) return
+        restoreSelfBeforePolicy()
+        restorePackage(packageName)
+    }
+
+    fun enforceAllowedPackages(
+        launcherPackage: String,
+        allowedApps: List<String>,
+        kioskMode: Boolean,
+        allowSettingsIfExplicitlyWhitelisted: Boolean
+    ) {
+        if (!isDeviceOwner()) return
+
+        val pm = context.packageManager
+        val currentLaunchables = launchablePackages(pm)
+        val imePkgs = enabledImePackages()
+        val previousManaged = readLastManagedPackages()
+
+        val explicitAllowed = allowedApps.toMutableSet()
+        if (!allowSettingsIfExplicitlyWhitelisted) {
+            explicitAllowed.remove("com.android.settings")
+        }
+
+        val keep = mutableSetOf<String>().apply {
+            add(selfPackage)
+            add(launcherPackage)
+            addAll(explicitAllowed)
+            addAll(minimumSystemSafelist(pm))
+            addAll(imePkgs)
+        }.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
+
+        restoreSelfBeforePolicy()
+        restorePackages(keep)
+
+        val managedCandidates = manageableCandidates(
+            currentLaunchables = currentLaunchables,
+            previousManaged = previousManaged,
+            keep = keep
+        )
+
+        val restrictCandidatesBase = nonCoreSystemPackages(pm, managedCandidates)
+            .filterNot { it in keep || it in imePkgs }
+            .toSet()
+
+        val restrictCandidates = removeSelfFromSet(restrictCandidatesBase)
+
+        val restored = mutableListOf<String>()
+        val hidden = mutableListOf<String>()
+        val suspended = mutableListOf<String>()
+
+        keep.forEach { pkg ->
+            if (isSelfPackage(pkg)) return@forEach
+
+            runCatching { dpm.setApplicationHidden(admin, pkg, false) }
+                .onSuccess { restored += pkg }
+                .onFailure { Log.w(tag, "Failed unhide keep package=$pkg", it) }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching { dpm.setPackagesSuspended(admin, arrayOf(pkg), false) }
+                    .onFailure { Log.w(tag, "Failed unsuspend keep package=$pkg", it) }
+            }
+        }
+
+        val lockedContainment = kioskMode && allowedApps.isEmpty()
+        if (lockedContainment) {
+            restrictCandidates.forEach { pkg ->
+                if (!isSelfPackage(pkg)) {
+                    runCatching { dpm.setApplicationHidden(admin, pkg, true) }
+                        .onSuccess { hidden += pkg }
+                        .onFailure { Log.w(tag, "Failed hide package=$pkg", it) }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        runCatching { dpm.setPackagesSuspended(admin, arrayOf(pkg), true) }
+                            .onSuccess { suspended += pkg }
+                            .onFailure { Log.w(tag, "Failed suspend package=$pkg", it) }
+                    }
+                }
+            }
+        } else {
+            Log.i(tag, "ACTIVE mode: skip aggressive hide/suspend containment")
+        }
+
+        setLockTaskPackages(keep.toTypedArray())
+        applyLockTaskFeatures(kioskMode = kioskMode, lockedMode = lockedContainment)
+
+        writeLastManagedPackages(restrictCandidates)
+
+        Log.i(
+            tag,
+            "enforceAllowedPackages done | self=$selfPackage lockedContainment=$lockedContainment " +
+                    "keep=${keep.size} ime=${imePkgs.size} managedCandidates=${managedCandidates.size} " +
+                    "restrictCandidates=${restrictCandidates.size} restored=${restored.size} " +
+                    "hidden=${hidden.size} suspended=${suspended.size} selfInRestrict=${restrictCandidates.any(::isSelfPackage)}"
+        )
+    }
+
+    fun applyLockedContainment(launcherPackage: String) {
+        enforceAllowedPackages(
+            launcherPackage = launcherPackage,
+            allowedApps = emptyList(),
+            kioskMode = true,
+            allowSettingsIfExplicitlyWhitelisted = false
+        )
+    }
+
+    fun startLockTaskIfPermitted(activity: Activity) {
+        restoreSelfBeforePolicy()
+        runCatching {
+            if (dpm.isLockTaskPermitted(selfPackage)) {
+                activity.startLockTask()
+            }
+        }.onFailure { Log.w(tag, "startLockTaskIfPermitted failed", it) }
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherScreen.kt">
+package com.example.mdmapplication.ui.launcher
+
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.example.mdmapplication.BuildConfig
+import com.example.mdmapplication.model.LauncherApp
+import com.google.accompanist.drawablepainter.rememberDrawablePainter
+
+private val LauncherBgTop = Color(0x6607101C)
+private val LauncherBgMid = Color(0x990A1424)
+private val LauncherBgBottom = Color(0xCC050A12)
+private val LauncherGlass = Color(0xAA121C2B)
+private val LauncherCard = Color(0xB0142031)
+private val LauncherBorder = Color.White.copy(alpha = 0.12f)
+private val LauncherText = Color(0xFFF2F7FF)
+private val LauncherMuted = Color(0xFFAAB7CC)
+private val LauncherAccent = Color(0xFF7CCBFF)
+private val LauncherAccentSoft = Color(0xFFB8E2FF)
+
+@Composable
+fun LauncherScreen(
+    apps: List<LauncherApp>,
+    isDeviceOwner: Boolean,
+    onAppClick: (String) -> Unit,
+    onClearPersistentHome: () -> Unit,
+    onApplyKioskHome: () -> Unit,
+    onExitLockTask: () -> Unit
+) {
+    var devMenuExpanded by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(LauncherBgTop, LauncherBgMid, LauncherBgBottom)
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Surface(
+                color = LauncherGlass,
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, LauncherBorder, RoundedCornerShape(28.dp))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "MDM Launcher",
+                                color = LauncherText,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (isDeviceOwner) {
+                                    "Thiết bị đang ở chế độ quản trị và launcher đang kiểm soát truy cập ứng dụng."
+                                } else {
+                                    "Thiết bị chưa ở chế độ Device Owner. Một số chính sách kiosk có thể chưa được áp dụng."
+                                },
+                                color = LauncherMuted,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
+                        if (BuildConfig.DEBUG) {
+                            Box {
+                                TextButton(
+                                    onClick = { devMenuExpanded = true }
+                                ) {
+                                    Text("DEV", color = LauncherAccent)
+                                }
+
+                                DropdownMenu(
+                                    expanded = devMenuExpanded,
+                                    onDismissRequest = { devMenuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Exit LockTask") },
+                                        onClick = {
+                                            devMenuExpanded = false
+                                            onExitLockTask()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Clear persistent HOME") },
+                                        enabled = isDeviceOwner,
+                                        onClick = {
+                                            devMenuExpanded = false
+                                            onClearPersistentHome()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Apply kiosk policy now") },
+                                        enabled = isDeviceOwner,
+                                        onClick = {
+                                            devMenuExpanded = false
+                                            onApplyKioskHome()
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        InfoChip(text = if (isDeviceOwner) "Managed" else "Unmanaged")
+                        InfoChip(text = "${apps.size} apps")
+                        if (BuildConfig.DEBUG) {
+                            InfoChip(text = "DEBUG")
+                        }
+                    }
+                }
+            }
+
+            if (apps.isEmpty()) {
+                Surface(
+                    color = LauncherGlass,
+                    shape = RoundedCornerShape(28.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .border(1.dp, LauncherBorder, RoundedCornerShape(28.dp))
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(24.dp)
+                        ) {
+                            Text(
+                                text = "Chưa có ứng dụng khả dụng",
+                                color = LauncherText,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = "Chờ backend trả allowedApps hoặc kiểm tra profile liên kết với thiết bị.",
+                                color = LauncherMuted,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 108.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(apps, key = { it.packageName }) { app ->
+                        LauncherAppCard(
+                            app = app,
+                            onClick = { onAppClick(app.packageName) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoChip(text: String) {
+    Surface(
+        color = LauncherAccent.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(999.dp),
+        modifier = Modifier.border(
+            width = 1.dp,
+            color = LauncherAccent.copy(alpha = 0.22f),
+            shape = RoundedCornerShape(999.dp)
+        )
+    ) {
+        Text(
+            text = text,
+            color = LauncherAccentSoft,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+        )
+    }
+}
+
+
+@Composable
+private fun LauncherAppCard(
+    app: LauncherApp,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(112.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Top
+    ) {
+        Surface(
+            color = Color.White.copy(alpha = 0.08f),
+            shape = CircleShape,
+            modifier = Modifier.size(64.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Image(
+                    painter = rememberDrawablePainter(app.icon),
+                    contentDescription = app.label,
+                    modifier = Modifier.size(38.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = app.label,
+            color = LauncherText,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+</file>
+
+<file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherActivity.kt">
+package com.example.mdmapplication.ui.launcher
+
+import android.app.admin.DevicePolicyManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.drawable.ColorDrawable
+import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import com.example.mdmapplication.BuildConfig
+import com.example.mdmapplication.device.DevicePolicyHelper
+import com.example.mdmapplication.ui.theme.MDMApplicationTheme
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import android.view.WindowManager
+class LauncherActivity : ComponentActivity() {
+
+    private val viewModel: LauncherViewModel by viewModels()
+    private var lastAppliedConfigVersion: Long? = null
+    private var lastHandledLockState: DeviceLockState? = null
+    private val tag = "LauncherActivity"
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        configureTransparentWindow()
+
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val policy = DevicePolicyHelper(this)
+        val isDo = dpm.isDeviceOwnerApp(packageName)
+
+        if (isDo && BuildConfig.DEBUG) {
+            policy.clearPersistentPreferredActivities()
+        }
+
+        viewModel.refreshFromBackend(this)
+
+        lifecycleScope.launch {
+            viewModel.state.collectLatest { st ->
+                if (!isDo) return@collectLatest
+
+                if (lastHandledLockState != st.lockState) {
+                    lastHandledLockState = st.lockState
+                    if (st.lockState == DeviceLockState.LOCKED) {
+                        policy.applyLockedContainment(packageName)
+                    }
+                }
+
+                if (st.lockState == DeviceLockState.ACTIVE) {
+                    val cfg = st.config ?: return@collectLatest
+                    if (lastAppliedConfigVersion != cfg.configVersionEpochMillis) {
+                        lastAppliedConfigVersion = cfg.configVersionEpochMillis
+
+                        policy.applyFromServerConfig(
+                            launcherPackage = packageName,
+                            allowedApps = cfg.allowedApps,
+                            kioskMode = cfg.kioskMode,
+                            disableStatusBar = cfg.disableStatusBar,
+                            blockUninstall = cfg.blockUninstall,
+                            disableWifi = cfg.disableWifi,
+                            disableBluetooth = cfg.disableBluetooth,
+                            disableCamera = cfg.disableCamera
+                        )
+                        policy.enforceAllowedPackages(
+                            launcherPackage = packageName,
+                            allowedApps = cfg.allowedApps,
+                            kioskMode = cfg.kioskMode,
+                            allowSettingsIfExplicitlyWhitelisted = true
+                        )
+
+                        viewModel.rebuildVisibleApps(this@LauncherActivity)
+
+                        if (cfg.kioskMode && !BuildConfig.DEBUG) {
+                            runCatching { startLockTask() }
+                                .onFailure { Log.w(tag, "startLockTask failed in ACTIVE", it) }
+                        }
+                    }
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            viewModel.commandActions.collectLatest { action ->
+                when (action) {
+                    LauncherCommandAction.TryLockScreen -> {
+                        if (isDo) {
+                            runCatching { startLockTask() }
+                                .onFailure { Log.w(tag, "TryLockScreen startLockTask failed", it) }
+                        }
+                    }
+
+                    LauncherCommandAction.BringMdmToFrontAndLock -> {
+                        bringSelfToFrontOnce()
+                        if (isDo) {
+                            policy.applyLockedContainment(packageName)
+                        }
+                    }
+
+                    LauncherCommandAction.AllowedAppsUpdated -> {
+                        Toast.makeText(
+                            this@LauncherActivity,
+                            "Allowed apps updated",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+
+        setContent {
+            MDMApplicationTheme(darkTheme = true, dynamicColor = false) {
+                val st by viewModel.state.collectAsState()
+
+                when (st.lockState) {
+                    DeviceLockState.LOCKED -> {
+                        UnlockScreen(
+                            error = st.unlockError,
+                            loading = st.loading,
+                            onUnlock = { password -> viewModel.unlock(this@LauncherActivity, password) }
+                        )
+                    }
+
+                    DeviceLockState.ACTIVE -> {
+                        LauncherScreen(
+                            apps = st.apps,
+                            isDeviceOwner = isDo,
+                            onAppClick = { pkg ->
+                                preparePackagesForLaunch(policy, pkg)
+
+                                val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+                                if (launchIntent == null) {
+                                    Log.w(tag, "Launch blocked: no launch intent for package=$pkg")
+                                    Toast.makeText(
+                                        this@LauncherActivity,
+                                        "App không có launcher activity hoặc đang bị chặn",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    return@LauncherScreen
+                                }
+
+                                runCatching { startActivity(launchIntent) }
+                                    .onFailure {
+                                        Log.w(tag, "Failed to launch package=$pkg", it)
+                                        Toast.makeText(
+                                            this@LauncherActivity,
+                                            "Không thể mở app: ${it.message ?: "unknown error"}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                            },
+                            onClearPersistentHome = {
+                                if (isDo) policy.clearPersistentPreferredActivities()
+                            },
+                            onApplyKioskHome = {
+                                if (isDo) {
+                                    st.config?.let { cfg ->
+                                        policy.applyFromServerConfig(
+                                            launcherPackage = packageName,
+                                            allowedApps = cfg.allowedApps,
+                                            kioskMode = cfg.kioskMode,
+                                            disableStatusBar = cfg.disableStatusBar,
+                                            blockUninstall = cfg.blockUninstall,
+                                            disableWifi = cfg.disableWifi,
+                                            disableBluetooth = cfg.disableBluetooth,
+                                            disableCamera = cfg.disableCamera
+                                        )
+                                        policy.enforceAllowedPackages(
+                                            launcherPackage = packageName,
+                                            allowedApps = cfg.allowedApps,
+                                            kioskMode = cfg.kioskMode,
+                                            allowSettingsIfExplicitlyWhitelisted = true
+                                        )
+                                        viewModel.rebuildVisibleApps(this@LauncherActivity)
+                                    }
+                                }
+                            },
+                            onExitLockTask = { runCatching { stopLockTask() } }
+                        )
+                    }
+
+                    DeviceLockState.UNKNOWN -> {
+                        LoadingOrErrorScreen(
+                            loading = st.loading,
+                            error = st.error,
+                            onRetry = { viewModel.refreshFromBackend(this@LauncherActivity) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.rebuildVisibleApps(this)
+    }
+
+    private fun preparePackagesForLaunch(policy: DevicePolicyHelper, targetPackage: String) {
+        runCatching {
+            policy.preparePackageForLaunch(packageName)
+            if (targetPackage != packageName) {
+                policy.preparePackageForLaunch(targetPackage)
+            }
+        }.onFailure {
+            Log.w(tag, "preparePackagesForLaunch failed target=$targetPackage", it)
+        }
+    }
+
+    private fun configureTransparentWindow() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+    }
+
+    private fun bringSelfToFrontOnce() {
+        startActivity(
+            Intent(this, LauncherActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+        )
+    }
+}
 </file>
 
 <file path="app/src/main/java/com/example/mdmapplication/ui/launcher/LauncherViewModel.kt">
@@ -2112,13 +2791,25 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.mdmapplication.data.remote.*
+import com.example.mdmapplication.data.remote.DeviceAckCommandRequest
+import com.example.mdmapplication.data.remote.DeviceConfigResponse
+import com.example.mdmapplication.data.remote.DeviceEventRequest
+import com.example.mdmapplication.data.remote.DevicePollCommandsRequest
+import com.example.mdmapplication.data.remote.DeviceRegisterRequest
+import com.example.mdmapplication.data.remote.DeviceUnlockRequest
+import com.example.mdmapplication.data.remote.LocationUpdateRequest
+import com.example.mdmapplication.data.remote.MdmApi
+import com.example.mdmapplication.data.remote.UsageBatchReportRequest
 import com.example.mdmapplication.model.LauncherApp
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 
 enum class DeviceLockState { UNKNOWN, LOCKED, ACTIVE }
@@ -2132,44 +2823,41 @@ data class LauncherUiState(
     val apps: List<LauncherApp> = emptyList()
 )
 
+sealed class LauncherCommandAction {
+    object TryLockScreen : LauncherCommandAction()
+    object BringMdmToFrontAndLock : LauncherCommandAction()
+    object AllowedAppsUpdated : LauncherCommandAction()
+}
+
 class LauncherViewModel : ViewModel() {
 
     private val _state = MutableStateFlow(LauncherUiState())
     val state: StateFlow<LauncherUiState> = _state
 
-    // ĐỔI IP NÀY theo môi trường:
-    // Emulator: http://10.0.2.2:8080
-    // Thiết bị thật: http://<IP_LAN_PC>:8080
-    private val api = MdmApi(baseUrl = "http://10.0.2.2:8080")
+    private val _commandActions = MutableSharedFlow<LauncherCommandAction>(extraBufferCapacity = 16)
+    val commandActions = _commandActions.asSharedFlow()
 
+    private val api = MdmApi(baseUrl = "http://10.0.2.2:8080")
     private val deviceUser = "device"
     private val devicePass = "device123"
-    private val userCode = "TEST123"  // phải khớp seed backend
+    private val tag = "LauncherViewModel"
 
     private var cachedToken: String? = null
     private var cachedDeviceCode: String? = null
 
-    // ===== BƯỚC 1: Login + Register + Kiểm tra trạng thái =====
+    private var locationJob: Job? = null
+    private var usageBatchJob: Job? = null
+    private var commandPollJob: Job? = null
+    private var lockStateSyncJob: Job? = null
+    private var configSyncJob: Job? = null
+
     fun refreshFromBackend(context: Context) {
         viewModelScope.launch {
+            val deviceCode = getDeviceCode(context)
+            cachedDeviceCode = deviceCode
+            _state.value = _state.value.copy(loading = true, error = null, unlockError = null)
+
             try {
-/*                _state.value = _state.value.copy(loading = true, error = null)
-
-                val token = getOrRefreshToken()
-                val deviceCode = getDeviceCode(context)
-                cachedDeviceCode = deviceCode
-
-                val registerResp = api.registerDevice(
-                    token = token,
-                    req = buildRegisterRequest(context, deviceCode)
-                )*/
-
-                //dao thu tu lay deviceCode len truoc
-                _state.value = _state.value.copy(loading = true, error = null)
-
-                val deviceCode = getDeviceCode(context)
-                cachedDeviceCode = deviceCode
-
                 val token = getOrRefreshToken(deviceCode)
 
                 val registerResp = api.registerDevice(
@@ -2177,17 +2865,22 @@ class LauncherViewModel : ViewModel() {
                     req = buildRegisterRequest(context, deviceCode)
                 )
 
-                // Map theo status trả về từ DTO mới
                 when (registerResp.status) {
                     "LOCKED" -> {
+                        stopLoops()
                         _state.value = _state.value.copy(
                             loading = false,
-                            lockState = DeviceLockState.LOCKED
+                            lockState = DeviceLockState.LOCKED,
+                            config = null,
+                            apps = emptyList()
                         )
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                     }
+
                     "ACTIVE" -> {
-                        loadConfig(token, deviceCode, context)
+                        loadConfig(context)
                     }
+
                     else -> {
                         _state.value = _state.value.copy(
                             loading = false,
@@ -2195,224 +2888,363 @@ class LauncherViewModel : ViewModel() {
                         )
                     }
                 }
+
+                startLockStateSyncLoop(context)
             } catch (e: MdmApi.ApiException) {
-                handleApiException(e)
+                handleApiException(e, duringConfig = false)
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(loading = false, error = t.message ?: "Lỗi kết nối")
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = t.message ?: "Lỗi kết nối"
+                )
             }
         }
     }
 
-    // ===== BƯỚC 2: Unlock (khi user nhập mật khẩu) =====
     fun unlock(context: Context, password: String) {
-        val deviceCode = cachedDeviceCode ?: return
-        viewModelScope.launch {
-            try {
-                _state.value = _state.value.copy(loading = true, unlockError = null)
-                val token = getOrRefreshToken()
+        val deviceCode = cachedDeviceCode ?: getDeviceCode(context).also { cachedDeviceCode = it }
 
+        viewModelScope.launch {
+            _state.value = _state.value.copy(loading = true, unlockError = null, error = null)
+            try {
+                val token = getOrRefreshToken(deviceCode)
                 val resp = api.unlockDevice(
                     token = token,
                     req = DeviceUnlockRequest(deviceCode = deviceCode, password = password)
                 )
 
                 if (resp.status == "ACTIVE") {
-                    loadConfig(token, deviceCode, context)
+                    loadConfig(context)
                 } else {
                     _state.value = _state.value.copy(
                         loading = false,
+                        lockState = DeviceLockState.LOCKED,
                         unlockError = "Mật khẩu không chính xác."
                     )
                 }
             } catch (e: MdmApi.ApiException) {
-                if (e.httpCode == 423) {
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        lockState = DeviceLockState.LOCKED,
-                        unlockError = e.message // Hiển thị thông báo khóa từ server
-                    )
-                } else {
-                    _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                when {
+                    e.httpCode == 423 || e.backendStatus == "LOCKED" -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            lockState = DeviceLockState.LOCKED,
+                            unlockError = e.message
+                        )
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                    }
+
+                    isDeviceCodeMismatch(e) -> {
+                        clearToken()
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            unlockError = "Device session mismatch, vui lòng thử lại."
+                        )
+                    }
+
+                    else -> {
+                        _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                    }
                 }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(loading = false, unlockError = t.message)
+                _state.value = _state.value.copy(loading = false, unlockError = t.message ?: "Lỗi mở khóa")
             }
         }
     }
 
-    // ===== BƯỚC 3: Load config sau khi ACTIVE =====
-
-    //lấy deviceCode
-    private suspend fun getOrRefreshToken(deviceCode: String): String {
-        return cachedToken ?: api.login(deviceUser, devicePass, deviceCode).token.also { cachedToken = it }
+    fun sendEvent(type: String, payload: String = "{}") {
+        val deviceCode = cachedDeviceCode ?: return
+        viewModelScope.launch {
+            try {
+                val token = getOrRefreshToken(deviceCode)
+                api.sendEvent(
+                    token = token,
+                    deviceCode = deviceCode,
+                    req = DeviceEventRequest(type = type, payload = payload)
+                )
+            } catch (e: MdmApi.ApiException) {
+                if (isDeviceCodeMismatch(e)) clearToken()
+            } catch (_: Throwable) {
+            }
+        }
     }
-    private suspend fun loadConfig(token: String, deviceCode: String, context: Context) {
-        try {
-            val config = api.fetchConfig(token, userCode, deviceCode)
-            val apps = loadAllowedApps(context, config.allowedApps)
 
-            _state.value = LauncherUiState(
+    fun rebuildVisibleApps(context: Context) {
+        val cfg = _state.value.config ?: return
+        val rebuilt = loadAllowedApps(context, cfg.allowedApps)
+        val oldPackages = _state.value.apps.map { it.packageName }
+        val newPackages = rebuilt.map { it.packageName }
+
+        _state.value = _state.value.copy(apps = rebuilt)
+
+        if (oldPackages != newPackages) {
+            _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
+        }
+    }
+
+    private fun startLockStateSyncLoop(context: Context) {
+        if (lockStateSyncJob?.isActive == true) return
+        lockStateSyncJob = viewModelScope.launch {
+            while (true) {
+                val deviceCode = cachedDeviceCode
+                if (deviceCode != null) {
+                    runCatching {
+                        val token = getOrRefreshToken(deviceCode)
+                        api.registerDevice(token, buildRegisterRequest(context, deviceCode))
+                    }.onSuccess { register ->
+                        if (register.status == "LOCKED" && _state.value.lockState != DeviceLockState.LOCKED) {
+                            stopLoops()
+                            _state.value = _state.value.copy(
+                                loading = false,
+                                lockState = DeviceLockState.LOCKED,
+                                config = null,
+                                apps = emptyList()
+                            )
+                            _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                        }
+                    }.onFailure { err ->
+                        val apiErr = err as? MdmApi.ApiException
+                        if (apiErr != null && (apiErr.httpCode == 423 || apiErr.backendStatus == "LOCKED")) {
+                            stopLoops()
+                            _state.value = _state.value.copy(
+                                loading = false,
+                                lockState = DeviceLockState.LOCKED,
+                                config = null,
+                                apps = emptyList()
+                            )
+                            _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                        }
+                    }
+                }
+                delay(7_000L)
+            }
+        }
+    }
+
+    private fun startConfigSyncLoop(context: Context) {
+        if (configSyncJob?.isActive == true) return
+        configSyncJob = viewModelScope.launch {
+            while (true) {
+                delay(15_000L)
+                if (_state.value.lockState != DeviceLockState.ACTIVE) continue
+
+                val deviceCode = cachedDeviceCode ?: continue
+                runCatching {
+                    val token = getOrRefreshToken(deviceCode)
+                    api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+                }.onSuccess { latest ->
+                    val currentVersion = _state.value.config?.configVersionEpochMillis
+                    if (currentVersion == null || currentVersion != latest.configVersionEpochMillis) {
+                        loadConfig(context)
+                    }
+                }.onFailure { err ->
+                    val apiErr = err as? MdmApi.ApiException
+                    if (apiErr != null && isDeviceCodeMismatch(apiErr)) {
+                        clearToken()
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun loadConfig(context: Context) {
+        val deviceCode = cachedDeviceCode ?: return
+        try {
+            val token = getOrRefreshToken(deviceCode)
+            val config = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+
+            _state.value = _state.value.copy(
                 loading = false,
                 lockState = DeviceLockState.ACTIVE,
                 config = config,
-                apps = apps
+                error = null,
+                unlockError = null
             )
 
-            startLocationLoop(token, deviceCode)
-
-            startUsageReportLoop(token, deviceCode, context)
-            //goi command loop sau, de dam bao chi active moi co quyen nhan lenh
-            startCommandLoop(token, deviceCode)
+            startLocationLoop()
+            startUsageBatchLoop(context)
+            startCommandPollLoop(context)
+            startLockStateSyncLoop(context)
+            startConfigSyncLoop(context)
         } catch (e: MdmApi.ApiException) {
-            if (e.httpCode == 423) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    lockState = DeviceLockState.LOCKED,
-                    error = "Thiết bị đã bị khóa từ hệ thống."
-                )
-            } else {
-                throw e // Để catch bên ngoài xử lý
-            }
+            handleApiException(e, duringConfig = true)
+        } catch (t: Throwable) {
+            _state.value = _state.value.copy(
+                loading = false,
+                error = t.message ?: "Load config thất bại"
+            )
         }
     }
 
-    // ===== LOCATION LOOP: mỗi 60 giây =====
-    private fun startLocationLoop(token: String, deviceCode: String) {
-        viewModelScope.launch {
+    private fun startLocationLoop() {
+        if (locationJob?.isActive == true) return
+        locationJob = viewModelScope.launch {
             while (true) {
-                try {
-                    // Dùng last known location - cần permission ACCESS_COARSE_LOCATION
-                    // Nếu muốn GPS thật, thêm LocationManager/FusedLocationProvider
-                    // Đây là placeholder - bạn thay bằng location thật
-                    api.updateLocation(
-                        token = token,
-                        req = LocationUpdateRequest(
-                            deviceCode = deviceCode,
-                            latitude = 0.0,
-                            longitude = 0.0,
-                            accuracyMeters = 0.0
+                val deviceCode = cachedDeviceCode
+                if (deviceCode != null) {
+                    try {
+                        val token = getOrRefreshToken(deviceCode)
+                        api.updateLocation(
+                            token = token,
+                            req = LocationUpdateRequest(
+                                deviceCode = deviceCode,
+                                latitude = 0.0,
+                                longitude = 0.0,
+                                accuracyMeters = 0.0
+                            )
                         )
-                    )
-                } catch (_: Throwable) { /* silent fail */ }
+                    } catch (e: MdmApi.ApiException) {
+                        if (isDeviceCodeMismatch(e)) clearToken()
+                    } catch (_: Throwable) {
+                    }
+                }
                 delay(60_000L)
             }
         }
     }
 
-    // ===== USAGE LOOP: mỗi 5 phút gửi batch =====
-/*    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
-        viewModelScope.launch {
+    private fun startUsageBatchLoop(context: Context) {
+        if (usageBatchJob?.isActive == true) return
+        usageBatchJob = viewModelScope.launch {
             while (true) {
                 delay(5 * 60_000L)
+
+                val deviceCode = cachedDeviceCode ?: continue
                 try {
                     val endMs = System.currentTimeMillis()
                     val startMs = endMs - 5 * 60_000L
-
-                    val usageList = collectAppUsage(context, startMs, endMs)
-                    for (usage in usageList) {
-                        api.reportUsage(
-                            token = token,
-                            req = UsageReportRequest(
-                                deviceCode = deviceCode,
-                                packageName = usage.packageName,
-                                startedAtEpochMillis = usage.startMs,
-                                endedAtEpochMillis = usage.endMs,
-                                durationMs = usage.durationMs
-                            )
-                        )
-                    }
-                } catch (_: Throwable) { *//* silent fail *//* }
-            }
-        }
-    }*/
-
-    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
-        viewModelScope.launch {
-            while (true) {
-                delay(5 * 60_000L)
-                try {
-                    val endMs = System.currentTimeMillis()
-                    val startMs = endMs - 5 * 60_000L
-
                     val usageList = collectAppUsage(context, startMs, endMs)
                     if (usageList.isEmpty()) continue
 
-                    val items = usageList.map {
-                        UsageBatchReportRequest.UsageItem(
-                            packageName = it.packageName,
-                            startedAtEpochMillis = it.startMs,
-                            endedAtEpochMillis = it.endMs,
-                            durationMs = it.durationMs
-                        )
-                    }
-
-                    api.reportUsageBatch(
-                        token = token,
-                        req = UsageBatchReportRequest(deviceCode = deviceCode, items = items)
+                    val token = getOrRefreshToken(deviceCode)
+                    val req = UsageBatchReportRequest(
+                        deviceCode = deviceCode,
+                        items = usageList.map {
+                            UsageBatchReportRequest.UsageItem(
+                                packageName = it.packageName,
+                                startedAtEpochMillis = it.startMs,
+                                endedAtEpochMillis = it.endMs,
+                                durationMs = it.durationMs
+                            )
+                        }
                     )
-                } catch (_: Throwable) { /* silent fail */ }
+                    api.reportUsageBatch(token = token, req = req)
+                } catch (e: MdmApi.ApiException) {
+                    if (isDeviceCodeMismatch(e)) clearToken()
+                } catch (_: Throwable) {
+                }
             }
         }
     }
 
+    private fun startCommandPollLoop(context: Context) {
+        if (commandPollJob?.isActive == true) return
+        commandPollJob = viewModelScope.launch {
+            while (true) {
+                val deviceCode = cachedDeviceCode
+                if (deviceCode != null) {
+                    try {
+                        val token = getOrRefreshToken(deviceCode)
+                        val pollResp = api.pollCommands(
+                            token = token,
+                            req = DevicePollCommandsRequest(deviceCode = deviceCode, limit = 5)
+                        )
 
-
-    //====== POLL COMMANDS LOOP: mỗi 30 giây =====
+                        for (cmd in pollResp.commands) {
+                            val result = executeCommand(context, cmd.type)
+                            runCatching {
+                                api.ackCommand(
+                                    token = token,
+                                    req = DeviceAckCommandRequest(
+                                        deviceCode = deviceCode,
+                                        commandId = cmd.id,
+                                        leaseToken = cmd.leaseToken,
+                                        result = if (result.success) "SUCCESS" else "FAILED",
+                                        error = result.error,
+                                        errorCode = result.errorCode,
+                                        output = result.output
+                                    )
+                                )
+                            }
+                        }
+                    } catch (e: MdmApi.ApiException) {
+                        if (isDeviceCodeMismatch(e)) clearToken()
+                    } catch (_: Throwable) {
+                    }
+                }
+                delay(15_000L)
+            }
+        }
+    }
 
     private data class CommandExecResult(
-        val result: String,           // "SUCCESS" | "FAILED"
+        val success: Boolean,
         val error: String? = null,
-        val output: String? = null,
+        val errorCode: String? = null,
+        val output: String? = null
     )
 
-    private fun startCommandLoop(token: String, deviceCode: String) {
-        viewModelScope.launch {
-            while (true) {
-                delay(10_000L)
-                try {
-                    val resp = api.pollCommands(token, DevicePollCommandsRequest(deviceCode, limit = 3))
-                    for (cmd in resp.commands) {
-                        val exec = executeCommand(cmd)
-                        api.ackCommand(
-                            token,
-                            DeviceAckCommandRequest(
-                                deviceCode = deviceCode,
-                                commandId = cmd.id,
-                                leaseToken = cmd.leaseToken,
-                                result = exec.result,
-                                error = exec.error,
-                                output = exec.output
+    private suspend fun executeCommand(context: Context, type: String): CommandExecResult {
+        return when (type.lowercase()) {
+            "refresh_config", "sync_config" -> {
+                runCatching { loadConfig(context) }
+                    .fold(
+                        onSuccess = { CommandExecResult(success = true, output = "Config refreshed") },
+                        onFailure = {
+                            CommandExecResult(
+                                success = false,
+                                error = it.message ?: "Refresh config failed",
+                                errorCode = "REFRESH_CONFIG_FAILED"
                             )
-                        )
-                    }
-                } catch (_: Throwable) { /* silent fail */ }
+                        }
+                    )
+            }
+
+            "lock_screen" -> {
+                _state.value = _state.value.copy(
+                    lockState = DeviceLockState.LOCKED,
+                    config = null,
+                    apps = emptyList()
+                )
+                _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                CommandExecResult(success = true, output = "Lock screen requested")
+            }
+
+            else -> {
+                CommandExecResult(
+                    success = false,
+                    error = "Unsupported command type: $type",
+                    errorCode = "UNSUPPORTED_COMMAND"
+                )
             }
         }
     }
 
-    private fun executeCommand(cmd: DeviceLeasedCommand): CommandExecResult {
-        // MVP: chỉ ACK để thông pipeline. Về sau map type->DevicePolicyHelper
-        return when (cmd.type.uppercase()) {
-            "PING" -> CommandExecResult(result = "SUCCESS", output = "pong")
-            else -> CommandExecResult(result = "FAILED", error = "Unsupported command: ${cmd.type}")
-        }
+    private suspend fun getOrRefreshToken(deviceCode: String): String {
+        val existing = cachedToken
+        if (existing != null) return existing
+
+        val newToken = api.login(
+            username = deviceUser,
+            password = devicePass,
+            deviceCode = deviceCode
+        ).token
+        cachedToken = newToken
+        return newToken
     }
 
-
-    // ===== GỬI EVENT =====
-    fun sendEvent(type: String, payload: String = "{}") {
-        val deviceCode = cachedDeviceCode ?: return
-        viewModelScope.launch {
-            try {
-                val token = getOrRefreshToken()
-                api.sendEvent(token, deviceCode, DeviceEventRequest(type = type, payload = payload))
-            } catch (_: Throwable) {}
-        }
+    private fun clearToken() {
+        cachedToken = null
     }
 
-    // ===== HELPERS =====
-    private suspend fun getOrRefreshToken(): String {
-        return cachedToken ?: api.login(deviceUser, devicePass).token.also { cachedToken = it }
+    private fun stopLoops() {
+        locationJob?.cancel()
+        usageBatchJob?.cancel()
+        commandPollJob?.cancel()
+        configSyncJob?.cancel()
+        locationJob = null
+        usageBatchJob = null
+        commandPollJob = null
+        configSyncJob = null
     }
 
     private fun getDeviceCode(context: Context): String =
@@ -2432,8 +3264,8 @@ class LauncherViewModel : ViewModel() {
             sdkInt = Build.VERSION.SDK_INT,
             manufacturer = Build.MANUFACTURER,
             model = Build.MODEL,
-            imei = "",          // cần READ_PHONE_STATE permission, để trống nếu chưa có
-            serial = "",        // Android 8+ cần permission
+            imei = "",
+            serial = "",
             batteryLevel = batteryLevel,
             isCharging = isCharging,
             wifiEnabled = wifiEnabled
@@ -2442,19 +3274,44 @@ class LauncherViewModel : ViewModel() {
 
     private fun loadAllowedApps(context: Context, packages: List<String>): List<LauncherApp> {
         val pm = context.packageManager
-        return packages.mapNotNull { pkg ->
-            try {
+        val resolvedApps = mutableListOf<LauncherApp>()
+        val unresolved = mutableListOf<String>()
+
+        packages.forEach { pkg ->
+            val app = runCatching {
                 val info = pm.getApplicationInfo(pkg, 0)
-                LauncherApp(
-                    packageName = pkg,
-                    label = pm.getApplicationLabel(info).toString(),
-                    icon = pm.getApplicationIcon(info)
-                )
-            } catch (_: Exception) { null }
+                val launchIntent = pm.getLaunchIntentForPackage(pkg)
+                if (launchIntent == null) {
+                    Log.w(tag, "Skip non-launchable package: $pkg")
+                    null
+                } else {
+                    LauncherApp(
+                        packageName = pkg,
+                        label = pm.getApplicationLabel(info).toString(),
+                        icon = pm.getApplicationIcon(info)
+                    )
+                }
+            }.onFailure { err ->
+                Log.w(tag, "Allowed package cannot be resolved: $pkg", err)
+            }.getOrNull()
+
+            if (app != null) {
+                resolvedApps += app
+            } else {
+                unresolved += pkg
+            }
         }
+
+        if (resolvedApps.isEmpty() && packages.isNotEmpty()) {
+            val first = unresolved.firstOrNull() ?: packages.first()
+            val msg = "Allowed package not installed/launchable or still hidden: $first"
+            _state.value = _state.value.copy(error = msg)
+            Log.w(tag, "All allowed packages unresolved. allowed=$packages unresolved=$unresolved")
+        }
+
+        return resolvedApps
     }
 
-    // Collect usage stats (cần PACKAGE_USAGE_STATS permission)
     private data class AppUsageEntry(
         val packageName: String,
         val startMs: Long,
@@ -2463,14 +3320,14 @@ class LauncherViewModel : ViewModel() {
     )
 
     private fun collectAppUsage(context: Context, startMs: Long, endMs: Long): List<AppUsageEntry> {
-        return try {
-            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
-            val stats = usm.queryUsageStats(
+        return runCatching {
+            val usm =
+                context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            usm.queryUsageStats(
                 android.app.usage.UsageStatsManager.INTERVAL_BEST,
-                startMs, endMs
-            )
-            stats
-                .filter { it.totalTimeInForeground > 0 }
+                startMs,
+                endMs
+            ).filter { it.totalTimeInForeground > 0 }
                 .map { s ->
                     AppUsageEntry(
                         packageName = s.packageName,
@@ -2479,19 +3336,42 @@ class LauncherViewModel : ViewModel() {
                         durationMs = s.totalTimeInForeground
                     )
                 }
-        } catch (_: Exception) { emptyList() }
+        }.getOrDefault(emptyList())
     }
 
-    // Helper xử lý lỗi API chung
-    private fun handleApiException(e: MdmApi.ApiException) {
-        if (e.httpCode == 423) {
-            _state.value = _state.value.copy(
-                loading = false,
-                lockState = DeviceLockState.LOCKED,
-                unlockError = e.message
-            )
-        } else {
-            _state.value = _state.value.copy(loading = false, error = e.message)
+    private fun isDeviceCodeMismatch(e: MdmApi.ApiException): Boolean {
+        return e.httpCode == 409 && e.backendCode == "DEVICE_CODE_MISMATCH"
+    }
+
+    private fun handleApiException(e: MdmApi.ApiException, duringConfig: Boolean) {
+        when {
+            e.httpCode == 423 || e.backendStatus == "LOCKED" -> {
+                stopLoops()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    config = null,
+                    apps = emptyList(),
+                    error = if (duringConfig) "Thiết bị đang bị khóa." else null,
+                    unlockError = if (duringConfig) null else e.message
+                )
+                _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+            }
+
+            isDeviceCodeMismatch(e) -> {
+                clearToken()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = "Device session mismatch, đã reset token. Vui lòng thử lại."
+                )
+            }
+
+            else -> {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = e.message
+                )
+            }
         }
     }
 }

@@ -1,18 +1,36 @@
 package com.example.mdmapplication.ui.launcher
 
+import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.mdmapplication.data.remote.*
+import com.example.mdmapplication.data.remote.DeviceAckCommandRequest
+import com.example.mdmapplication.data.remote.DeviceConfigResponse
+import com.example.mdmapplication.data.remote.DeviceEventRequest
+import com.example.mdmapplication.data.remote.DevicePollCommandsRequest
+import com.example.mdmapplication.data.remote.DeviceRegisterRequest
+import com.example.mdmapplication.data.remote.DeviceUnlockRequest
+import com.example.mdmapplication.data.remote.LocationUpdateRequest
+import com.example.mdmapplication.data.remote.MdmApi
+import com.example.mdmapplication.data.remote.UsageBatchReportRequest
+import com.example.mdmapplication.device.DevicePolicyHelper
 import com.example.mdmapplication.model.LauncherApp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class DeviceLockState { UNKNOWN, LOCKED, ACTIVE }
 
@@ -25,99 +43,72 @@ data class LauncherUiState(
     val apps: List<LauncherApp> = emptyList()
 )
 
+sealed class LauncherCommandAction {
+    object TryLockScreen : LauncherCommandAction()
+    object BringMdmToFrontAndLock : LauncherCommandAction()
+    object AllowedAppsUpdated : LauncherCommandAction()
+}
+
 class LauncherViewModel : ViewModel() {
-
-    private var locationLoopStarted = false
-    private var usageLoopStarted = false
-    private var commandLoopStarted = false
-
-    //cờ để loop load config sau khi unlock thành công, để áp dụng policy mới ngay lập tức
-    private var configLoopStarted = false
-
-    //luu appcontext de goi loadConfig tu command loop
-    private var appContext: Context? = null
 
     private val _state = MutableStateFlow(LauncherUiState())
     val state: StateFlow<LauncherUiState> = _state
 
-    // ĐỔI IP NÀY theo môi trường:
-    // Emulator: http://10.0.2.2:8080
-    // Thiết bị thật: http://<IP_LAN_PC>:8080
-    private val api = MdmApi(baseUrl = "http://10.0.2.2:8080")
+    private val _commandActions = MutableSharedFlow<LauncherCommandAction>(extraBufferCapacity = 16)
+    val commandActions = _commandActions.asSharedFlow()
 
+    private val api = MdmApi(baseUrl = "http://10.0.2.2:8080")
     private val deviceUser = "device"
     private val devicePass = "device123"
-    private val userCode = "TEST123"  // phải khớp seed backend
+    private val tag = "LauncherViewModel"
 
     private var cachedToken: String? = null
+    private var cachedTokenDeviceCode: String? = null
     private var cachedDeviceCode: String? = null
 
-    //Hàm syncConfig để gọi lại loadConfig sau khi unlock thành công, đảm bảo policy mới được áp dụng ngay lập tức mà không phải đợi đến lần refresh tiếp theo
-    private fun startConfigSyncLoop(token: String, deviceCode: String, context: Context) {
-        if (configLoopStarted) return
-        configLoopStarted = true
+    private var locationJob: Job? = null
+    private var usageBatchJob: Job? = null
+    private var commandPollJob: Job? = null
+    private var stateSnapshotJob: Job? = null
+    private val configLoadMutex = Mutex()
+    private var refreshAttemptSeq: Long = 0
 
-        viewModelScope.launch {
-            while (true) {
-                delay(10_000L)
-                try {
-                    val config = api.fetchConfig(token, userCode, deviceCode)
-                    val apps = loadAllowedApps(context, config.allowedApps)
-
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        lockState = DeviceLockState.ACTIVE,
-                        config = config,
-                        apps = apps,
-                        error = null
-                    )
-                } catch (_: Throwable) {
-                    // giữ launcher chạy ổn định
-                }
-            }
-        }
-    }
-
-    // ===== BƯỚC 1: Login + Register + Kiểm tra trạng thái =====
     fun refreshFromBackend(context: Context) {
-        appContext = context.applicationContext
         viewModelScope.launch {
+            val deviceCode = resolveCurrentDeviceCode(context, reason = "refreshFromBackend")
+            val refreshId = ++refreshAttemptSeq
+            Log.i(tag, "refreshFromBackend start refreshId=$refreshId deviceCode=$deviceCode")
+            _state.value = _state.value.copy(loading = true, error = null, unlockError = null)
+
             try {
-/*                _state.value = _state.value.copy(loading = true, error = null)
-
-                val token = getOrRefreshToken()
-                val deviceCode = getDeviceCode(context)
-                cachedDeviceCode = deviceCode
-
-                val registerResp = api.registerDevice(
-                    token = token,
-                    req = buildRegisterRequest(context, deviceCode)
-                )*/
-
-                //dao thu tu lay deviceCode len truoc
-                _state.value = _state.value.copy(loading = true, error = null)
-
-                val deviceCode = getDeviceCode(context)
-                cachedDeviceCode = deviceCode
-
                 val token = getOrRefreshToken(deviceCode)
 
                 val registerResp = api.registerDevice(
                     token = token,
                     req = buildRegisterRequest(context, deviceCode)
                 )
+                Log.i(tag, "register result refreshId=$refreshId status=${registerResp.status}")
+                runCatching { reportStateSnapshotNow(context, deviceCode, token) }
 
-                // Map theo status trả về từ DTO mới
                 when (registerResp.status) {
                     "LOCKED" -> {
+                        stopTelemetryLoops()
                         _state.value = _state.value.copy(
                             loading = false,
-                            lockState = DeviceLockState.LOCKED
+                            lockState = DeviceLockState.LOCKED,
+                            config = null,
+                            apps = emptyList()
                         )
+                        startCommandPollLoop(context)
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                     }
+
                     "ACTIVE" -> {
-                        loadConfig(token, deviceCode, context)
+                        Log.i(tag, "refreshFromBackend ACTIVE refreshId=$refreshId -> loadConfig")
+                        loadConfig(context)
+                        startStateSnapshotLoop(context)
                     }
+
                     else -> {
                         _state.value = _state.value.copy(
                             loading = false,
@@ -126,291 +117,502 @@ class LauncherViewModel : ViewModel() {
                     }
                 }
             } catch (e: MdmApi.ApiException) {
-                handleApiException(e)
+                Log.e(
+                    tag,
+                    "refreshFromBackend api failure refreshId=$refreshId code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
+                    e
+                )
+                handleApiException(e, duringConfig = false)
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(loading = false, error = t.message ?: "Lỗi kết nối")
+                Log.e(tag, "refreshFromBackend failure refreshId=$refreshId", t)
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = t.message ?: "Lỗi kết nối"
+                )
             }
         }
     }
 
-    // ===== BƯỚC 2: Unlock (khi user nhập mật khẩu) =====
     fun unlock(context: Context, password: String) {
-        appContext = context.applicationContext
-        val deviceCode = cachedDeviceCode ?: return
-        viewModelScope.launch {
-            try {
-                _state.value = _state.value.copy(loading = true, unlockError = null)
-                val token = getOrRefreshToken()
+        val deviceCode = resolveCurrentDeviceCode(context, reason = "unlock")
 
+        viewModelScope.launch {
+            _state.value = _state.value.copy(loading = true, unlockError = null, error = null)
+            try {
+                val token = getOrRefreshToken(deviceCode)
                 val resp = api.unlockDevice(
                     token = token,
                     req = DeviceUnlockRequest(deviceCode = deviceCode, password = password)
                 )
 
                 if (resp.status == "ACTIVE") {
-                    loadConfig(token, deviceCode, context)
+                    loadConfig(context)
                 } else {
                     _state.value = _state.value.copy(
                         loading = false,
+                        lockState = DeviceLockState.LOCKED,
                         unlockError = "Mật khẩu không chính xác."
                     )
                 }
             } catch (e: MdmApi.ApiException) {
-                if (e.httpCode == 423) {
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        lockState = DeviceLockState.LOCKED,
-                        unlockError = e.message // Hiển thị thông báo khóa từ server
-                    )
-                } else {
-                    _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                when {
+                    isDeviceLocked(e) -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            lockState = DeviceLockState.LOCKED,
+                            unlockError = e.message
+                        )
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                    }
+
+                    isDeviceCodeMismatch(e) -> {
+                        clearIdentitySession()
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            unlockError = "Device session mismatch, vui lòng thử lại."
+                        )
+                    }
+
+                    else -> {
+                        _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                    }
                 }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(loading = false, unlockError = t.message)
+                _state.value = _state.value.copy(loading = false, unlockError = t.message ?: "Lỗi mở khóa")
             }
         }
     }
 
-    // ===== BƯỚC 3: Load config sau khi ACTIVE =====
-
-    //lấy deviceCode
-    private suspend fun getOrRefreshToken(deviceCode: String): String {
-        return cachedToken ?: api.login(deviceUser, devicePass, deviceCode).token.also { cachedToken = it }
+    fun sendEvent(type: String, payload: String = "{}") {
+        val deviceCode = cachedDeviceCode ?: return
+        viewModelScope.launch {
+            try {
+                val token = getOrRefreshToken(deviceCode)
+                api.sendEvent(
+                    token = token,
+                    deviceCode = deviceCode,
+                    req = DeviceEventRequest(type = type, payload = payload)
+                )
+            } catch (e: MdmApi.ApiException) {
+                if (isDeviceCodeMismatch(e)) clearToken()
+            } catch (_: Throwable) {
+            }
+        }
     }
-    private suspend fun loadConfig(token: String, deviceCode: String, context: Context) {
-        try {
-            val config = api.fetchConfig(token, userCode, deviceCode)
-            val apps = loadAllowedApps(context, config.allowedApps)
 
-            _state.value = LauncherUiState(
-                loading = false,
-                lockState = DeviceLockState.ACTIVE,
-                config = config,
-                apps = apps
-            )
+    fun rebuildVisibleApps(context: Context) {
+        val cfg = _state.value.config ?: return
+        val rebuilt = loadAllowedApps(context, cfg.allowedApps)
+        val oldPackages = _state.value.apps.map { it.packageName }
+        val newPackages = rebuilt.map { it.packageName }
 
-            startLocationLoop(token, deviceCode)
+        _state.value = _state.value.copy(apps = rebuilt)
 
-            startUsageReportLoop(token, deviceCode, context)
-            //goi command loop sau, de dam bao chi active moi co quyen nhan lenh
-            startCommandLoop(context,token, deviceCode)
-            startConfigSyncLoop(token, deviceCode, context)
-        } catch (e: MdmApi.ApiException) {
-            if (e.httpCode == 423) {
+        if (oldPackages != newPackages) {
+            _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
+        }
+    }
+
+    private suspend fun loadConfig(context: Context) {
+        configLoadMutex.withLock {
+            val deviceCode = resolveCurrentDeviceCode(context, reason = "loadConfig")
+            Log.i(tag, "loadConfig enter deviceCode=$deviceCode")
+            try {
+                val token = getOrRefreshToken(deviceCode)
+                val previousConfig = _state.value.config
+
+                val config = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+
+                val policy = DevicePolicyHelper(context)
+                if (policy.isDeviceOwner()) {
+                    Log.i(tag, "applyFromServerConfig enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
+                    policy.applyFromServerConfig(
+                        launcherPackage = context.packageName,
+                        allowedApps = config.allowedApps,
+                        kioskMode = config.kioskMode,
+                        disableStatusBar = config.disableStatusBar,
+                        blockUninstall = config.blockUninstall,
+                        disableWifi = config.disableWifi,
+                        disableBluetooth = config.disableBluetooth,
+                        disableCamera = config.disableCamera
+                    )
+                    Log.i(tag, "enforceAllowedPackages enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
+                    policy.enforceAllowedPackages(
+                        launcherPackage = context.packageName,
+                        allowedApps = config.allowedApps,
+                        kioskMode = config.kioskMode,
+                        allowSettingsIfExplicitlyWhitelisted = true
+                    )
+                }
+
+                val apps = loadAllowedApps(context, config.allowedApps)
+
+                val changed = previousConfig?.allowedApps != config.allowedApps ||
+                        previousConfig?.configVersionEpochMillis != config.configVersionEpochMillis
+
                 _state.value = _state.value.copy(
                     loading = false,
-                    lockState = DeviceLockState.LOCKED,
-                    error = "Thiết bị đã bị khóa từ hệ thống."
+                    lockState = DeviceLockState.ACTIVE,
+                    config = config,
+                    apps = apps,
+                    error = null,
+                    unlockError = null
                 )
-            } else {
-                throw e // Để catch bên ngoài xử lý
+
+                if (changed) {
+                    _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
+                }
+
+                startLocationLoop()
+                startUsageBatchLoop(context)
+                startCommandPollLoop(context)
+                startStateSnapshotLoop(context)
+                runCatching { reportStateSnapshotNow(context, deviceCode, token) }
+                Log.i(
+                    tag,
+                    "loadConfig exit success deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} commandPollActive=${commandPollJob?.isActive == true}"
+                )
+            } catch (e: MdmApi.ApiException) {
+                Log.e(
+                    tag,
+                    "loadConfig api failure deviceCode=$deviceCode code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
+                    e
+                )
+                handleApiException(e, duringConfig = true)
+            } catch (t: Throwable) {
+                Log.e(tag, "loadConfig failure deviceCode=$deviceCode", t)
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = t.message ?: "Load config thất bại"
+                )
+            } finally {
+                Log.i(tag, "loadConfig exit deviceCode=$deviceCode")
             }
         }
     }
 
-    // ===== LOCATION LOOP: mỗi 60 giây =====
-    private fun startLocationLoop(token: String, deviceCode: String) {
-        if(locationLoopStarted) return
-        locationLoopStarted = true
-        viewModelScope.launch {
+    private fun startLocationLoop() {
+        if (locationJob?.isActive == true) return
+        locationJob = viewModelScope.launch {
             while (true) {
-                try {
-                    // Dùng last known location - cần permission ACCESS_COARSE_LOCATION
-                    // Nếu muốn GPS thật, thêm LocationManager/FusedLocationProvider
-                    // Đây là placeholder - bạn thay bằng location thật
-                    api.updateLocation(
-                        token = token,
-                        req = LocationUpdateRequest(
-                            deviceCode = deviceCode,
-                            latitude = 0.0,
-                            longitude = 0.0,
-                            accuracyMeters = 0.0
+                val deviceCode = cachedDeviceCode
+                if (deviceCode != null) {
+                    try {
+                        val token = getOrRefreshToken(deviceCode)
+                        api.updateLocation(
+                            token = token,
+                            req = LocationUpdateRequest(
+                                deviceCode = deviceCode,
+                                latitude = 0.0,
+                                longitude = 0.0,
+                                accuracyMeters = 0.0
+                            )
                         )
-                    )
-                } catch (_: Throwable) { /* silent fail */ }
+                    } catch (e: MdmApi.ApiException) {
+                        if (isDeviceCodeMismatch(e)) clearToken()
+                    } catch (_: Throwable) {
+                    }
+                }
                 delay(60_000L)
             }
         }
     }
 
-    // ===== USAGE LOOP: mỗi 5 phút gửi batch =====
-/*    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
-        viewModelScope.launch {
+    private fun startUsageBatchLoop(context: Context) {
+        if (usageBatchJob?.isActive == true) return
+        usageBatchJob = viewModelScope.launch {
             while (true) {
                 delay(5 * 60_000L)
+
+                val deviceCode = cachedDeviceCode ?: continue
                 try {
                     val endMs = System.currentTimeMillis()
                     val startMs = endMs - 5 * 60_000L
-
-                    val usageList = collectAppUsage(context, startMs, endMs)
-                    for (usage in usageList) {
-                        api.reportUsage(
-                            token = token,
-                            req = UsageReportRequest(
-                                deviceCode = deviceCode,
-                                packageName = usage.packageName,
-                                startedAtEpochMillis = usage.startMs,
-                                endedAtEpochMillis = usage.endMs,
-                                durationMs = usage.durationMs
-                            )
-                        )
-                    }
-                } catch (_: Throwable) { *//* silent fail *//* }
-            }
-        }
-    }*/
-
-    private fun startUsageReportLoop(token: String, deviceCode: String, context: Context) {
-        if (usageLoopStarted) return
-        usageLoopStarted= true
-        viewModelScope.launch {
-            while (true) {
-                delay(5 * 60_000L)
-                try {
-                    val endMs = System.currentTimeMillis()
-                    val startMs = endMs - 5 * 60_000L
-
                     val usageList = collectAppUsage(context, startMs, endMs)
                     if (usageList.isEmpty()) continue
 
-                    val items = usageList.map {
-                        UsageBatchReportRequest.UsageItem(
-                            packageName = it.packageName,
-                            startedAtEpochMillis = it.startMs,
-                            endedAtEpochMillis = it.endMs,
-                            durationMs = it.durationMs
-                        )
-                    }
-
-                    api.reportUsageBatch(
-                        token = token,
-                        req = UsageBatchReportRequest(deviceCode = deviceCode, items = items)
-                    )
-                } catch (_: Throwable) { /* silent fail */ }
-            }
-        }
-    }
-
-
-
-    //====== POLL COMMANDS LOOP: mỗi 30 giây =====
-
-    private data class CommandExecResult(
-        val result: String,           // "SUCCESS" | "FAILED"
-        val error: String? = null,
-        val output: String? = null,
-    )
-
-    private fun startCommandLoop(context: Context, token : String, deviceCode: String) {
-        if(commandLoopStarted) return
-        commandLoopStarted = true
-        viewModelScope.launch {
-            while (true) {
-                delay(10_000L)
-                try {
-                    val resp = api.pollCommands(token, DevicePollCommandsRequest(deviceCode, limit = 3))
-                    for (cmd in resp.commands) {
-                        val exec = executeCommand(cmd)
-                        api.ackCommand(
-                            token,
-                            DeviceAckCommandRequest(
-                                deviceCode = deviceCode,
-                                commandId = cmd.id,
-                                leaseToken = cmd.leaseToken,
-                                result = exec.result,
-                                error = exec.error,
-                                output = exec.output
+                    val token = getOrRefreshToken(deviceCode)
+                    val req = UsageBatchReportRequest(
+                        deviceCode = deviceCode,
+                        items = usageList.map {
+                            UsageBatchReportRequest.UsageItem(
+                                packageName = it.packageName,
+                                startedAtEpochMillis = it.startMs,
+                                endedAtEpochMillis = it.endMs,
+                                durationMs = it.durationMs
                             )
-                        )
-                        refreshConfigOnly(context)
-                    }
-                } catch (_: Throwable) { /* silent fail */ }
-                delay(5_000L)
+                        }
+                    )
+                    api.reportUsageBatch(token = token, req = req)
+                } catch (e: MdmApi.ApiException) {
+                    if (isDeviceCodeMismatch(e)) clearToken()
+                } catch (_: Throwable) {
+                }
             }
         }
     }
 
-/*
-    private fun executeCommand(cmd: DeviceLeasedCommand): CommandExecResult {
-        // MVP: chỉ ACK để thông pipeline. Về sau map type->DevicePolicyHelper
-        return when (cmd.type.uppercase()) {
-            "PING" -> CommandExecResult(result = "SUCCESS", output = "pong")
-            else -> CommandExecResult(result = "FAILED", error = "Unsupported command: ${cmd.type}")
+    private fun startCommandPollLoop(context: Context) {
+        if (commandPollJob?.isActive == true) {
+            Log.i(tag, "startCommandPollLoop entered but already active")
+            return
         }
-    }
-*/
-
-    // Có command thì sẽ loop lại refesh config, để áp dụng policy mới ngay lập tức
-    private fun executeCommand(cmd: DeviceLeasedCommand): CommandExecResult {
-        return when (cmd.type.uppercase()) {
-            "PING" -> CommandExecResult(result = "SUCCESS", output = "pong")
-
-            "REFRESH_CONFIG" -> {
-                val token = cachedToken
-                    ?: return CommandExecResult(result = "FAILED", error = "No token")
+        Log.i(tag, "startCommandPollLoop entered")
+        commandPollJob = viewModelScope.launch {
+            var pollAttempt = 0L
+            while (true) {
                 val deviceCode = cachedDeviceCode
-                    ?: return CommandExecResult(result = "FAILED", error = "No deviceCode")
-                val context = appContext
-                    ?: return CommandExecResult(result = "FAILED", error = "No appContext")
-
-                viewModelScope.launch {
+                if (deviceCode != null) {
                     try {
-                        loadConfig(token, deviceCode, context)
-                    } catch (_: Throwable) {
+                        pollAttempt += 1
+                        Log.i(tag, "poll attempt=$pollAttempt deviceCode=$deviceCode")
+                        val token = getOrRefreshToken(deviceCode)
+                        runCatching { reportStateSnapshotNow(context, deviceCode, token) }
+                        val pollResp = api.pollCommands(
+                            token = token,
+                            req = DevicePollCommandsRequest(deviceCode = deviceCode, limit = 5)
+                        )
+                        Log.i(tag, "poll success attempt=$pollAttempt commandCount=${pollResp.commands.size}")
+
+                        for (cmd in pollResp.commands) {
+                            val result = executeCommand(context, cmd.type)
+                            runCatching {
+                                api.ackCommand(
+                                    token = token,
+                                    req = DeviceAckCommandRequest(
+                                        deviceCode = deviceCode,
+                                        commandId = cmd.id,
+                                        leaseToken = cmd.leaseToken,
+                                        result = if (result.success) "SUCCESS" else "FAILED",
+                                        error = result.error,
+                                        errorCode = result.errorCode,
+                                        output = result.output
+                                    )
+                                )
+                            }.onSuccess {
+                                Log.i(
+                                    tag,
+                                    "ack success commandId=${cmd.id} type=${cmd.type} result=${if (result.success) "SUCCESS" else "FAILED"}"
+                                )
+                            }.onFailure { ackErr ->
+                                Log.e(
+                                    tag,
+                                    "ack failure commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}",
+                                    ackErr
+                                )
+                            }
+                        }
+                    } catch (e: MdmApi.ApiException) {
+                        Log.e(
+                            tag,
+                            "poll failure api attempt=$pollAttempt deviceCode=$deviceCode code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
+                            e
+                        )
+                        if (isDeviceCodeMismatch(e)) clearToken()
+                    } catch (ce: CancellationException) {
+                        Log.i(tag, "poll loop cancelled attempt=$pollAttempt reason=${ce.message}")
+                        throw ce
+                    } catch (t: Throwable) {
+                        Log.e(tag, "poll failure unexpected attempt=$pollAttempt deviceCode=$deviceCode", t)
+                    }
+                } else {
+                    Log.w(tag, "poll skipped because deviceCode is null")
+                }
+                delay(15_000L)
+            }
+        }
+        commandPollJob?.invokeOnCompletion { cause ->
+            if (cause == null) {
+                Log.w(tag, "commandPollJob completed without exception")
+            } else {
+                Log.w(tag, "commandPollJob completed with cause=${cause.message}", cause)
+            }
+        }
+        Log.i(tag, "commandPollJob started active=${commandPollJob?.isActive == true}")
+    }
+
+    private fun startStateSnapshotLoop(context: Context) {
+        if (stateSnapshotJob?.isActive == true) return
+        stateSnapshotJob = viewModelScope.launch {
+            while (true) {
+                val deviceCode = cachedDeviceCode
+                if (deviceCode != null) {
+                    runCatching {
+                        val token = getOrRefreshToken(deviceCode)
+                        reportStateSnapshotNow(context, deviceCode, token)
                     }
                 }
-
-                CommandExecResult(result = "SUCCESS", output = "config refresh triggered")
+                delay(30_000L)
             }
+        }
+    }
 
-            else -> CommandExecResult(
-                result = "FAILED",
-                error = "Unsupported command: ${cmd.type}"
+    private suspend fun reportStateSnapshotNow(context: Context, deviceCode: String, token: String) {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
+
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val homePkg = runCatching {
+            context.packageManager.resolveActivity(homeIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName
+        }.getOrNull()
+        val isLauncherDefault = homePkg == context.packageName
+
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val lockMode = runCatching { am.lockTaskModeState }.getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
+        val isKioskRunning = lockMode != ActivityManager.LOCK_TASK_MODE_NONE
+
+        api.reportStateSnapshot(
+            token = token,
+            req = com.example.mdmapplication.data.remote.DeviceStateSnapshotRequest(
+                deviceCode = deviceCode,
+                reportedAtEpochMillis = System.currentTimeMillis(),
+                batteryLevel = null,
+                isCharging = null,
+                wifiEnabled = null,
+                networkType = "WIFI",
+                foregroundPackage = context.packageName,
+                agentVersion = "1.0",
+                agentBuildCode = 1,
+                currentLauncherPackage = context.packageName,
+                uptimeMs = android.os.SystemClock.elapsedRealtime(),
+                abi = Build.SUPPORTED_ABIS.firstOrNull(),
+                buildFingerprint = Build.FINGERPRINT,
+                isDeviceOwner = isDeviceOwner,
+                isLauncherDefault = isLauncherDefault,
+                isKioskRunning = isKioskRunning
             )
-        }
+        )
+        Log.i(
+            tag,
+            "state snapshot sent deviceCode=$deviceCode isDeviceOwner=$isDeviceOwner isLauncherDefault=$isLauncherDefault isKioskRunning=$isKioskRunning"
+        )
     }
 
-    // reload config từ server mà không cần đợi đến lần refresh định kỳ tiếp theo, thường dùng sau khi nhận được command REFRESH_CONFIG
+    override fun onCleared() {
+        Log.w(
+            tag,
+            "onCleared called; jobs active location=${locationJob?.isActive == true}, usage=${usageBatchJob?.isActive == true}, poll=${commandPollJob?.isActive == true}"
+        )
+        super.onCleared()
+    }
 
+    private data class CommandExecResult(
+        val success: Boolean,
+        val error: String? = null,
+        val errorCode: String? = null,
+        val output: String? = null
+    )
 
-    private fun refreshConfigOnly(context: Context) {
-        val token = cachedToken ?: return
-        val deviceCode = cachedDeviceCode ?: return
+    private suspend fun executeCommand(context: Context, type: String): CommandExecResult {
+        return when (type.lowercase()) {
+            "refresh_config", "sync_config" -> {
+                runCatching { loadConfig(context) }
+                    .fold(
+                        onSuccess = { CommandExecResult(success = true, output = "Config refreshed") },
+                        onFailure = {
+                            CommandExecResult(
+                                success = false,
+                                error = it.message ?: "Refresh config failed",
+                                errorCode = "REFRESH_CONFIG_FAILED"
+                            )
+                        }
+                    )
+            }
 
-        viewModelScope.launch {
-            try {
-                val config = api.fetchConfig(token, userCode, deviceCode)
-                val apps = loadAllowedApps(context, config.allowedApps)
-
+            "lock_screen" -> {
                 _state.value = _state.value.copy(
-                    config = config,
-                    apps = apps,
-                    error = null
+                    lockState = DeviceLockState.LOCKED,
+                    config = null,
+                    apps = emptyList()
                 )
-            } catch (_: Throwable) {
-                // silent hoặc log nhẹ
+                _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                CommandExecResult(success = true, output = "Lock screen requested")
+            }
+
+            else -> {
+                CommandExecResult(
+                    success = false,
+                    error = "Unsupported command type: $type",
+                    errorCode = "UNSUPPORTED_COMMAND"
+                )
             }
         }
     }
 
-    // ===== GỬI EVENT =====
-    fun sendEvent(type: String, payload: String = "{}") {
-        val deviceCode = cachedDeviceCode ?: return
-        viewModelScope.launch {
-            try {
-                val token = getOrRefreshToken()
-                api.sendEvent(token, deviceCode, DeviceEventRequest(type = type, payload = payload))
-            } catch (_: Throwable) {}
+    private suspend fun getOrRefreshToken(deviceCode: String): String {
+        val existing = cachedToken
+        if (existing != null && cachedTokenDeviceCode == deviceCode) return existing
+
+        if (existing != null && cachedTokenDeviceCode != deviceCode) {
+            Log.w(
+                tag,
+                "token deviceCode mismatch: tokenBoundTo=$cachedTokenDeviceCode requested=$deviceCode -> re-login"
+            )
+            clearToken()
         }
+
+        val newToken = api.login(
+            username = deviceUser,
+            password = devicePass,
+            deviceCode = deviceCode
+        ).token
+        cachedToken = newToken
+        cachedTokenDeviceCode = deviceCode
+        return newToken
     }
 
-    // ===== HELPERS =====
-    private suspend fun getOrRefreshToken(): String {
-        return cachedToken ?: api.login(deviceUser, devicePass).token.also { cachedToken = it }
+    private fun clearToken() {
+        cachedToken = null
+        cachedTokenDeviceCode = null
     }
 
-    private fun getDeviceCode(context: Context): String =
-        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "UNKNOWN"
+    private fun stopTelemetryLoops() {
+        locationJob?.cancel()
+        usageBatchJob?.cancel()
+        stateSnapshotJob?.cancel()
+        locationJob = null
+        usageBatchJob = null
+        stateSnapshotJob = null
+    }
+
+    private fun clearIdentitySession() {
+        clearToken()
+        cachedDeviceCode = null
+    }
+
+    private fun resolveCurrentDeviceCode(context: Context, reason: String): String {
+        val current = getDeviceCode(context)
+        val previous = cachedDeviceCode
+        if (previous != null && previous != current) {
+            Log.w(tag, "deviceCode changed reason=$reason old=$previous new=$current -> clear session")
+            clearToken()
+        }
+        cachedDeviceCode = current
+        return current
+    }
+
+    private fun getDeviceCode(context: Context): String {
+        val fromDefault = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+        val fromDeviceProtected = runCatching {
+            Settings.Secure.getString(
+                context.createDeviceProtectedStorageContext().contentResolver,
+                Settings.Secure.ANDROID_ID
+            )
+        }.getOrNull()
+
+        val selected = when {
+            !fromDeviceProtected.isNullOrBlank() -> fromDeviceProtected
+            !fromDefault.isNullOrBlank() -> fromDefault
+            else -> "UNKNOWN"
+        }
+
+        Log.i(
+            tag,
+            "getDeviceCode source default=$fromDefault deviceProtected=$fromDeviceProtected selected=$selected"
+        )
+        return selected
+    }
 
     private fun buildRegisterRequest(context: Context, deviceCode: String): DeviceRegisterRequest {
         val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -426,8 +628,8 @@ class LauncherViewModel : ViewModel() {
             sdkInt = Build.VERSION.SDK_INT,
             manufacturer = Build.MANUFACTURER,
             model = Build.MODEL,
-            imei = "",          // cần READ_PHONE_STATE permission, để trống nếu chưa có
-            serial = "",        // Android 8+ cần permission
+            imei = "",
+            serial = "",
             batteryLevel = batteryLevel,
             isCharging = isCharging,
             wifiEnabled = wifiEnabled
@@ -436,19 +638,38 @@ class LauncherViewModel : ViewModel() {
 
     private fun loadAllowedApps(context: Context, packages: List<String>): List<LauncherApp> {
         val pm = context.packageManager
-        return packages.mapNotNull { pkg ->
-            try {
+        val resolvedApps = mutableListOf<LauncherApp>()
+        val unresolved = mutableListOf<String>()
+
+        packages.forEach { pkg ->
+            val app = runCatching {
                 val info = pm.getApplicationInfo(pkg, 0)
                 LauncherApp(
                     packageName = pkg,
                     label = pm.getApplicationLabel(info).toString(),
                     icon = pm.getApplicationIcon(info)
                 )
-            } catch (_: Exception) { null }
+            }.onFailure { err ->
+                Log.w(tag, "Allowed package cannot be resolved: $pkg", err)
+            }.getOrNull()
+
+            if (app != null) {
+                resolvedApps += app
+            } else {
+                unresolved += pkg
+            }
         }
+
+        if (resolvedApps.isEmpty() && packages.isNotEmpty()) {
+            val first = unresolved.firstOrNull() ?: packages.first()
+            val msg = "Allowed package not installed or still hidden: $first"
+            _state.value = _state.value.copy(error = msg)
+            Log.w(tag, "All allowed packages unresolved. allowed=$packages unresolved=$unresolved")
+        }
+
+        return resolvedApps
     }
 
-    // Collect usage stats (cần PACKAGE_USAGE_STATS permission)
     private data class AppUsageEntry(
         val packageName: String,
         val startMs: Long,
@@ -457,14 +678,14 @@ class LauncherViewModel : ViewModel() {
     )
 
     private fun collectAppUsage(context: Context, startMs: Long, endMs: Long): List<AppUsageEntry> {
-        return try {
-            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
-            val stats = usm.queryUsageStats(
+        return runCatching {
+            val usm =
+                context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            usm.queryUsageStats(
                 android.app.usage.UsageStatsManager.INTERVAL_BEST,
-                startMs, endMs
-            )
-            stats
-                .filter { it.totalTimeInForeground > 0 }
+                startMs,
+                endMs
+            ).filter { it.totalTimeInForeground > 0 }
                 .map { s ->
                     AppUsageEntry(
                         packageName = s.packageName,
@@ -473,19 +694,47 @@ class LauncherViewModel : ViewModel() {
                         durationMs = s.totalTimeInForeground
                     )
                 }
-        } catch (_: Exception) { emptyList() }
+        }.getOrDefault(emptyList())
     }
 
-    // Helper xử lý lỗi API chung
-    private fun handleApiException(e: MdmApi.ApiException) {
-        if (e.httpCode == 423) {
-            _state.value = _state.value.copy(
-                loading = false,
-                lockState = DeviceLockState.LOCKED,
-                unlockError = e.message
-            )
-        } else {
-            _state.value = _state.value.copy(loading = false, error = e.message)
+    private fun isDeviceCodeMismatch(e: MdmApi.ApiException): Boolean {
+        return e.httpCode == 409 && e.backendCode == "DEVICE_CODE_MISMATCH"
+    }
+
+    private fun isDeviceLocked(e: MdmApi.ApiException): Boolean {
+        val msg = e.message.lowercase()
+        return e.httpCode == 423 || e.backendCode == "DEVICE_LOCKED" || msg.contains("locked")
+    }
+
+    private fun handleApiException(e: MdmApi.ApiException, duringConfig: Boolean) {
+        when {
+            isDeviceLocked(e) -> {
+                stopTelemetryLoops()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    config = null,
+                    apps = emptyList(),
+                    error = if (duringConfig) "Thiết bị đang bị khóa." else null,
+                    unlockError = if (duringConfig) null else e.message
+                )
+                _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+            }
+
+            isDeviceCodeMismatch(e) -> {
+                clearIdentitySession()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = "Device session mismatch, đã reset token/session. Vui lòng thử lại."
+                )
+            }
+
+            else -> {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = e.message
+                )
+            }
         }
     }
 }
