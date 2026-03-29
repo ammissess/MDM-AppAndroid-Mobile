@@ -4,6 +4,7 @@ import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,9 +22,12 @@ class LauncherActivity : ComponentActivity() {
     private val viewModel: LauncherViewModel by viewModels()
     private var lastAppliedConfigVersion: Long? = null
     private var lastHandledLockState: DeviceLockState? = null
+    private var lastRefreshTriggerAtMs: Long = 0L
+    private val tag = "LauncherActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(tag, "onCreate savedInstanceState=${savedInstanceState != null} taskId=$taskId")
 
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val policy = DevicePolicyHelper(this)
@@ -33,7 +37,7 @@ class LauncherActivity : ComponentActivity() {
             policy.clearPersistentPreferredActivities()
         }
 
-        viewModel.refreshFromBackend(this)
+        triggerRefreshFromBackend("onCreate")
 
         lifecycleScope.launch {
             viewModel.state.collectLatest { st ->
@@ -93,7 +97,7 @@ class LauncherActivity : ComponentActivity() {
                     }
 
                     LauncherCommandAction.AllowedAppsUpdated -> {
-                        // Recovery foreground trước để tránh kẹt app cũ (màn xám) khi profile vừa đổi.
+                        // Recovery foreground trước để trnh kẹt app cũ (mn xm) khi profile vừa đổi.
                         bringSelfToFrontOnce()
                         if (isDo) {
                             policy.startLockTaskIfPermitted(this@LauncherActivity)
@@ -167,6 +171,24 @@ class LauncherActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        Log.i(tag, "onResume taskId=$taskId")
+        triggerRefreshFromBackend("onResume")
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        Log.i(tag, "onNewIntent action=${intent.action} taskId=$taskId")
+        triggerRefreshFromBackend("onNewIntent")
+    }
+
+    override fun onDestroy() {
+        Log.w(tag, "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations")
+        super.onDestroy()
+    }
+
+
     private fun bringSelfToFrontOnce() {
         startActivity(
             Intent(this, LauncherActivity::class.java).apply {
@@ -177,5 +199,16 @@ class LauncherActivity : ComponentActivity() {
                 )
             }
         )
+    }
+
+    private fun triggerRefreshFromBackend(reason: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastRefreshTriggerAtMs < 2_000L) {
+            Log.i(tag, "skip refreshFromBackend reason=$reason (debounced)")
+            return
+        }
+        lastRefreshTriggerAtMs = now
+        Log.i(tag, "trigger refreshFromBackend reason=$reason")
+        viewModel.refreshFromBackend(this)
     }
 }

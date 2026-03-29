@@ -43,7 +43,8 @@
             android:name=".ui.launcher.LauncherActivity"
             android:exported="true"
             android:lockTaskMode="if_whitelisted"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MDMApplication.Launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />

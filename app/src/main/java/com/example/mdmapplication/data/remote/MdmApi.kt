@@ -32,7 +32,6 @@ class MdmApi(private val baseUrl: String) {
 
     class ApiException(
         val httpCode: Int,
-        val backendStatus: String? = null,
         val backendCode: String? = null,
         override val message: String
     ) : Exception(message)
@@ -43,7 +42,6 @@ class MdmApi(private val baseUrl: String) {
         val err = runCatching { body<ApiErrorResponse>() }.getOrNull()
         throw ApiException(
             httpCode = status.value,
-            backendStatus = err?.status,
             backendCode = err?.code,
             message = err?.error ?: "HTTP ${status.value}"
         )
@@ -112,6 +110,13 @@ class MdmApi(private val baseUrl: String) {
 
     suspend fun ackCommand(token: String, req: DeviceAckCommandRequest): DeviceAckCommandResponse =
         client.post("$baseUrl/api/device/ack") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
+    suspend fun reportStateSnapshot(token: String, req: DeviceStateSnapshotRequest): DeviceStateSnapshotResponse =
+        client.post("$baseUrl/api/device/state") {
             header("Authorization", "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(req)

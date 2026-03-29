@@ -60,8 +60,6 @@ data class DeviceConfigResponse(
     val disableStatusBar: Boolean,
     val kioskMode: Boolean,
     val blockUninstall: Boolean,
-    val showWifi: Boolean,
-    val showBluetooth: Boolean,
     val configVersionEpochMillis: Long
 )
 
@@ -105,7 +103,11 @@ data class UsageBatchReportResponse(
 @Serializable
 data class DeviceEventRequest(
     val type: String,
-    val payload: String = "{}"
+    val payload: String = "{}",
+    val category: String = "GENERAL",
+    val severity: String = "INFO",
+    val errorCode: String? = null,
+    val message: String? = null
 )
 
 @Serializable
@@ -152,6 +154,38 @@ data class DeviceAckCommandResponse(
 @Serializable
 data class ApiErrorResponse(
     val error: String? = null,
-    val status: String? = null,
     val code: String? = null
+)
+
+@Serializable
+data class DeviceStateSnapshotRequest(
+    val deviceCode: String,
+    val reportedAtEpochMillis: Long,
+    val batteryLevel: Int? = null,
+    val isCharging: Boolean? = null,
+    val wifiEnabled: Boolean? = null,
+    val networkType: String? = null,
+    val foregroundPackage: String? = null,
+    val agentVersion: String? = null,
+    val agentBuildCode: Int? = null,
+    val currentLauncherPackage: String? = null,
+    val uptimeMs: Long? = null,
+    val abi: String? = null,
+    val buildFingerprint: String? = null,
+    val isDeviceOwner: Boolean? = null,
+    val isLauncherDefault: Boolean? = null,
+    val isKioskRunning: Boolean? = null,
+    val storageFreeBytes: Long? = null,
+    val storageTotalBytes: Long? = null,
+    val ramFreeMb: Int? = null,
+    val ramTotalMb: Int? = null,
+    val lastBootAtEpochMillis: Long? = null,
+    val errorCode: String? = null,
+    val errorMessage: String? = null
+)
+
+@Serializable
+data class DeviceStateSnapshotResponse(
+    val ok: Boolean,
+    val updatedAtEpochMillis: Long
 )
