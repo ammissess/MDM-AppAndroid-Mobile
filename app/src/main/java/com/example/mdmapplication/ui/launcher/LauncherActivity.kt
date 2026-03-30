@@ -20,8 +20,6 @@ import kotlinx.coroutines.launch
 class LauncherActivity : ComponentActivity() {
 
     private val viewModel: LauncherViewModel by viewModels()
-    private var lastAppliedConfigVersion: Long? = null
-    private var lastHandledLockState: DeviceLockState? = null
     private var lastRefreshTriggerAtMs: Long = 0L
     private val tag = "LauncherActivity"
 
@@ -40,48 +38,6 @@ class LauncherActivity : ComponentActivity() {
         triggerRefreshFromBackend("onCreate")
 
         lifecycleScope.launch {
-            viewModel.state.collectLatest { st ->
-                if (!isDo) return@collectLatest
-
-                if (lastHandledLockState != st.lockState) {
-                    lastHandledLockState = st.lockState
-                    if (st.lockState == DeviceLockState.LOCKED) {
-                        policy.applyLockedContainment(packageName)
-                        policy.startLockTaskIfPermitted(this@LauncherActivity)
-                    }
-                }
-
-                if (st.lockState == DeviceLockState.ACTIVE) {
-                    val cfg = st.config ?: return@collectLatest
-                    if (lastAppliedConfigVersion != cfg.configVersionEpochMillis) {
-                        lastAppliedConfigVersion = cfg.configVersionEpochMillis
-
-                        policy.applyFromServerConfig(
-                            launcherPackage = packageName,
-                            allowedApps = cfg.allowedApps,
-                            kioskMode = cfg.kioskMode,
-                            disableStatusBar = cfg.disableStatusBar,
-                            blockUninstall = cfg.blockUninstall,
-                            disableWifi = cfg.disableWifi,
-                            disableBluetooth = cfg.disableBluetooth,
-                            disableCamera = cfg.disableCamera
-                        )
-                        policy.enforceAllowedPackages(
-                            launcherPackage = packageName,
-                            allowedApps = cfg.allowedApps,
-                            kioskMode = cfg.kioskMode,
-                            allowSettingsIfExplicitlyWhitelisted = true
-                        )
-
-                        if (cfg.kioskMode && !BuildConfig.DEBUG) {
-                            runCatching { startLockTask() }
-                        }
-                    }
-                }
-            }
-        }
-
-        lifecycleScope.launch {
             viewModel.commandActions.collectLatest { action ->
                 when (action) {
                     LauncherCommandAction.TryLockScreen -> {
@@ -91,7 +47,8 @@ class LauncherActivity : ComponentActivity() {
                     LauncherCommandAction.BringMdmToFrontAndLock -> {
                         bringSelfToFrontOnce()
                         if (isDo) {
-                            policy.applyLockedContainment(packageName)
+                            runCatching { policy.applyLockedContainment(packageName) }
+                                .onFailure { Log.e(tag, "applyLockedContainment failed", it) }
                             policy.startLockTaskIfPermitted(this@LauncherActivity)
                         }
                     }
@@ -135,26 +92,7 @@ class LauncherActivity : ComponentActivity() {
                             if (isDo) policy.clearPersistentPreferredActivities()
                         },
                         onApplyKioskHome = {
-                            if (isDo) {
-                                st.config?.let { cfg ->
-                                    policy.applyFromServerConfig(
-                                        launcherPackage = packageName,
-                                        allowedApps = cfg.allowedApps,
-                                        kioskMode = cfg.kioskMode,
-                                        disableStatusBar = cfg.disableStatusBar,
-                                        blockUninstall = cfg.blockUninstall,
-                                        disableWifi = cfg.disableWifi,
-                                        disableBluetooth = cfg.disableBluetooth,
-                                        disableCamera = cfg.disableCamera
-                                    )
-                                    policy.enforceAllowedPackages(
-                                        launcherPackage = packageName,
-                                        allowedApps = cfg.allowedApps,
-                                        kioskMode = cfg.kioskMode,
-                                        allowSettingsIfExplicitlyWhitelisted = true
-                                    )
-                                }
-                            }
+                            triggerRefreshFromBackend("manualApplyKioskHome")
                         },
                         onExitLockTask = { runCatching { stopLockTask() } }
                     )

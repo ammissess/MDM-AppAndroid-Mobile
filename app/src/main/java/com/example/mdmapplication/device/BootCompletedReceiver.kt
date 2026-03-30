@@ -15,13 +15,6 @@ class BootCompletedReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                val policy = DevicePolicyHelper(context)
-
-                // Chỉ re-assert policy tối thiểu; KHÔNG ép locked containment vô điều kiện ở boot.
-                policy.applyMinimumKioskPolicy(
-                    launcherPackage = context.packageName,
-                    allowedApps = emptyList()
-                )
 
                 val launch = Intent(context, LauncherActivity::class.java).apply {
                     addFlags(

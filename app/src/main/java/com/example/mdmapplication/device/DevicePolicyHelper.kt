@@ -55,6 +55,76 @@ class DevicePolicyHelper(private val context: Context) {
 
     private fun removeSelfFromSet(source: Set<String>): Set<String> = source.filterNot(::isSelfPackage).toSet()
 
+    private inline fun runPolicyOrThrow(step: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            throw IllegalStateException("$step failed: ${t.message}", t)
+        }
+    }
+
+    private fun restorePackageStrict(packageName: String) {
+        if (packageName.isBlank()) return
+        runPolicyOrThrow("setApplicationHidden(false)[$packageName]") {
+            dpm.setApplicationHidden(admin, packageName, false)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            runPolicyOrThrow("setPackagesSuspended(false)[$packageName]") {
+                dpm.setPackagesSuspended(admin, arrayOf(packageName), false)
+            }
+        }
+    }
+
+    private fun restorePackagesStrict(packages: Collection<String>) {
+        packages.forEach { restorePackageStrict(it) }
+    }
+
+    private fun restoreSelfBeforePolicyStrict() {
+        restorePackageStrict(selfPackage)
+        Log.i(tag, "restoreSelfBeforePolicyStrict done selfPackage=$selfPackage")
+    }
+
+    private fun setLockTaskPackagesStrict(packages: Array<String>) {
+        restoreSelfBeforePolicyStrict()
+        val distinct = packages.distinct().toTypedArray()
+        runPolicyOrThrow("setLockTaskPackages") {
+            dpm.setLockTaskPackages(admin, distinct)
+        }
+    }
+
+    private fun setUserRestrictionStrict(key: String, disabled: Boolean) {
+        runPolicyOrThrow("setUserRestriction[$key]=$disabled") {
+            if (disabled) dpm.addUserRestriction(admin, key)
+            else dpm.clearUserRestriction(admin, key)
+        }
+    }
+
+    private fun setPersistentHomeToLauncherStrict() {
+        restoreSelfBeforePolicyStrict()
+        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+        val launcher = ComponentName(context, LauncherActivity::class.java)
+        runPolicyOrThrow("addPersistentPreferredActivity") {
+            dpm.addPersistentPreferredActivity(admin, filter, launcher)
+        }
+    }
+
+    private fun applyLockTaskFeaturesStrict(kioskMode: Boolean, lockedMode: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val flags = when {
+            !kioskMode -> DevicePolicyManager.LOCK_TASK_FEATURE_HOME
+            lockedMode -> DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
+                    DevicePolicyManager.LOCK_TASK_FEATURE_OVERVIEW or
+                    DevicePolicyManager.LOCK_TASK_FEATURE_NOTIFICATIONS
+            else -> DevicePolicyManager.LOCK_TASK_FEATURE_NONE
+        }
+        runPolicyOrThrow("setLockTaskFeatures") {
+            dpm.setLockTaskFeatures(admin, flags)
+        }
+    }
+
     fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(selfPackage)
 
     fun setLockTaskPackages(packages: Array<String>) {
@@ -144,19 +214,27 @@ class DevicePolicyHelper(private val context: Context) {
             "applyFromServerConfig enter launcherPackage=$launcherPackage allowedApps=${allowedApps.size} kioskMode=$kioskMode isDeviceOwner=$isOwner"
         )
         if (!isOwner) return
-        restoreSelfBeforePolicy()
-        setPersistentHomeToLauncher()
-        setLockTaskPackages((listOf(launcherPackage, selfPackage) + allowedApps).distinct().toTypedArray())
-        applyLockTaskFeatures(kioskMode = kioskMode, lockedMode = false)
+        restoreSelfBeforePolicyStrict()
+        setPersistentHomeToLauncherStrict()
+        setLockTaskPackagesStrict((listOf(launcherPackage, selfPackage) + allowedApps).distinct().toTypedArray())
+        applyLockTaskFeaturesStrict(kioskMode = kioskMode, lockedMode = false)
 
-        if (blockUninstall) blockUninstall(selfPackage)
-        disableStatusBar(disableStatusBar)
-        setWifiDisabled(disableWifi)
-        setBluetoothDisabled(disableBluetooth)
-        setCameraDisabled(disableCamera)
+        if (blockUninstall) {
+            runPolicyOrThrow("setUninstallBlocked[$selfPackage]=true") {
+                dpm.setUninstallBlocked(admin, selfPackage, true)
+            }
+        }
+        runPolicyOrThrow("setStatusBarDisabled[$disableStatusBar]") {
+            dpm.setStatusBarDisabled(admin, disableStatusBar)
+        }
+        setUserRestrictionStrict(UserManager.DISALLOW_CONFIG_WIFI, disableWifi)
+        setUserRestrictionStrict(UserManager.DISALLOW_BLUETOOTH, disableBluetooth)
+        runPolicyOrThrow("setCameraDisabled[$disableCamera]") {
+            dpm.setCameraDisabled(admin, disableCamera)
+        }
 
-        setDebuggingDisabled(false)
-        setSafeBootDisabled(false)
+        setUserRestrictionStrict(UserManager.DISALLOW_DEBUGGING_FEATURES, false)
+        setUserRestrictionStrict(UserManager.DISALLOW_SAFE_BOOT, false)
         Log.i(tag, "applyFromServerConfig done")
     }
 
@@ -281,8 +359,8 @@ class DevicePolicyHelper(private val context: Context) {
             addAll(imePkgs)
         }.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
 
-        restoreSelfBeforePolicy()
-        restorePackages(keep)
+        restoreSelfBeforePolicyStrict()
+        restorePackagesStrict(keep)
 
         val managedCandidates = manageableCandidates(
             currentLaunchables = currentLaunchables,
@@ -303,13 +381,15 @@ class DevicePolicyHelper(private val context: Context) {
         keep.forEach { pkg ->
             if (isSelfPackage(pkg)) return@forEach
 
-            runCatching { dpm.setApplicationHidden(admin, pkg, false) }
-                .onSuccess { restored += pkg }
-                .onFailure { Log.w(tag, "Failed unhide keep package=$pkg", it) }
+            runPolicyOrThrow("setApplicationHidden(false)[$pkg]") {
+                dpm.setApplicationHidden(admin, pkg, false)
+            }
+            restored += pkg
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                runCatching { dpm.setPackagesSuspended(admin, arrayOf(pkg), false) }
-                    .onFailure { Log.w(tag, "Failed unsuspend keep package=$pkg", it) }
+                runPolicyOrThrow("setPackagesSuspended(false)[$pkg]") {
+                    dpm.setPackagesSuspended(admin, arrayOf(pkg), false)
+                }
             }
         }
 
@@ -318,8 +398,8 @@ class DevicePolicyHelper(private val context: Context) {
         val lockedContainment = false
         Log.i(tag, "ACTIVE mode: skip aggressive hide/suspend containment")
 
-        setLockTaskPackages(keep.toTypedArray())
-        applyLockTaskFeatures(kioskMode = kioskMode, lockedMode = lockedContainment)
+        setLockTaskPackagesStrict(keep.toTypedArray())
+        applyLockTaskFeaturesStrict(kioskMode = kioskMode, lockedMode = lockedContainment)
 
         writeLastManagedPackages(restrictCandidates)
 
@@ -335,7 +415,9 @@ class DevicePolicyHelper(private val context: Context) {
     fun applyLockedContainment(launcherPackage: String) {
         val isOwner = isDeviceOwner()
         Log.i(tag, "applyLockedContainment enter launcherPackage=$launcherPackage isDeviceOwner=$isOwner")
-        if (!isOwner) return
+        if (!isOwner) {
+            throw IllegalStateException("Device is not owner, cannot enforce lock containment")
+        }
 
         val pm = context.packageManager
         val imePkgs = enabledImePackages()
@@ -346,13 +428,13 @@ class DevicePolicyHelper(private val context: Context) {
             addAll(imePkgs)
         }.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
 
-        restoreSelfBeforePolicy()
-        restorePackages(keep)
+        restoreSelfBeforePolicyStrict()
+        restorePackagesStrict(keep)
 
         // Locked containment is limited to lock-task + persistent home to avoid launcher self-break.
-        setPersistentHomeToLauncher()
-        setLockTaskPackages(keep.toTypedArray())
-        applyLockTaskFeatures(kioskMode = true, lockedMode = true)
+        setPersistentHomeToLauncherStrict()
+        setLockTaskPackagesStrict(keep.toTypedArray())
+        applyLockTaskFeaturesStrict(kioskMode = true, lockedMode = true)
         writeLastManagedPackages(emptySet())
 
         Log.i(

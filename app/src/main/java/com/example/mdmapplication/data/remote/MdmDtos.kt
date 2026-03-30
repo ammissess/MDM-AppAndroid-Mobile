@@ -189,3 +189,23 @@ data class DeviceStateSnapshotResponse(
     val ok: Boolean,
     val updatedAtEpochMillis: Long
 )
+
+@Serializable
+data class DevicePolicyStateReportRequest(
+    val deviceCode: String,
+    val desiredConfigVersionEpochMillis: Long? = null,
+    val desiredConfigHash: String? = null,
+    val appliedConfigVersionEpochMillis: Long? = null,
+    val appliedConfigHash: String? = null,
+    val policyApplyStatus: String,
+    val policyApplyError: String? = null,
+    val policyApplyErrorCode: String? = null,
+    val policyAppliedAtEpochMillis: Long? = null
+)
+
+@Serializable
+data class DevicePolicyStateResponse(
+    val ok: Boolean,
+    val status: String
+)
+

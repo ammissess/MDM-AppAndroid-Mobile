@@ -121,4 +121,11 @@ class MdmApi(private val baseUrl: String) {
             contentType(ContentType.Application.Json)
             setBody(req)
         }.bodyOrThrow()
+
+    suspend fun reportPolicyState(token: String, req: DevicePolicyStateReportRequest): DevicePolicyStateResponse =
+        client.post("$baseUrl/api/device/policy-state") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
 }
