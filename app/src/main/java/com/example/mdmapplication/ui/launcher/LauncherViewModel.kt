@@ -98,7 +98,23 @@ class LauncherViewModel : ViewModel() {
                     req = buildRegisterRequest(context, deviceCode)
                 )
                 Log.i(tag, "register result refreshId=$refreshId status=${registerResp.status}")
+                runCatching {
+                    api.sendEvent(
+                        token = token,
+                        deviceCode = deviceCode,
+                        req = DeviceEventRequest(type = "launcher_refresh", payload = "{\"refreshId\":$refreshId}")
+                    )
+                }.onSuccess {
+                    Log.i(tag, "event upload success type=launcher_refresh refreshId=$refreshId deviceCode=$deviceCode")
+                }.onFailure { eventErr ->
+                    val apiErr = eventErr as? MdmApi.ApiException
+                    if (apiErr != null && isDeviceCodeMismatch(apiErr)) {
+                        clearIdentitySession()
+                    }
+                    Log.w(tag, "event upload failure type=launcher_refresh refreshId=$refreshId deviceCode=$deviceCode", eventErr)
+                }
                 runCatching { reportStateSnapshotNow(context, deviceCode, token) }
+                val wasLocked = _state.value.lockState == DeviceLockState.LOCKED
 
                 when (registerResp.status) {
                     "LOCKED" -> {
@@ -110,7 +126,10 @@ class LauncherViewModel : ViewModel() {
                             apps = emptyList()
                         )
                         startCommandPollLoop(context)
-                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                        // Avoid repeated foreground relaunch while already locked.
+                        if (!wasLocked) {
+                            _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                        }
                     }
 
                     "ACTIVE" -> {
@@ -177,6 +196,11 @@ class LauncherViewModel : ViewModel() {
                     )
                 }
             } catch (e: MdmApi.ApiException) {
+                Log.w(
+                    tag,
+                    "unlock api failure deviceCode=$deviceCode code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
+                    e
+                )
                 when {
                     isDeviceLocked(e) -> {
                         stopTelemetryLoops()
@@ -202,6 +226,7 @@ class LauncherViewModel : ViewModel() {
                     }
                 }
             } catch (t: Throwable) {
+                Log.e(tag, "unlock failure deviceCode=$deviceCode", t)
                 _state.value = _state.value.copy(loading = false, unlockError = t.message ?: "Lỗi mở khóa")
             }
         }
@@ -479,7 +504,8 @@ class LauncherViewModel : ViewModel() {
                     api.reportUsageBatch(token = token, req = req)
                 } catch (e: MdmApi.ApiException) {
                     if (isDeviceCodeMismatch(e)) clearToken()
-                } catch (_: Throwable) {
+                } catch (t: Throwable) {
+                    Log.e(tag, "usageBatch unexpected error", t)
                 }
             }
         }
