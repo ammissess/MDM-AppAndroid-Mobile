@@ -1,16 +1,20 @@
 package com.example.mdmapplication.ui.launcher
 
 import android.app.ActivityManager
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.StatFs
 import android.provider.Settings
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mdmapplication.BuildConfig
@@ -311,7 +315,7 @@ class LauncherViewModel : ViewModel() {
                     _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
                 }
 
-                startLocationLoop()
+                startLocationLoop(context)
                 startUsageBatchLoop(context)
                 startCommandPollLoop(context)
                 startStateSnapshotLoop(context)
@@ -449,26 +453,51 @@ class LauncherViewModel : ViewModel() {
         }
     }
 
-    private fun startLocationLoop() {
+    private fun startLocationLoop(context: Context) {
+        Log.i(tag, "startLocationLoop called active=${locationJob?.isActive == true}")
         if (locationJob?.isActive == true) return
         locationJob = viewModelScope.launch {
+            Log.i(tag, "location loop started")
             while (true) {
+                Log.i(tag, "location loop tick cachedDeviceCode=$cachedDeviceCode")
                 val deviceCode = cachedDeviceCode
                 if (deviceCode != null) {
                     try {
-                        val token = getOrRefreshToken(deviceCode)
-                        api.updateLocation(
-                            token = token,
-                            req = LocationUpdateRequest(
-                                deviceCode = deviceCode,
-                                latitude = 0.0,
-                                longitude = 0.0,
-                                accuracyMeters = 0.0
-                            )
+                        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                        val hasFineLocation = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                        val hasCoarseLocation = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        val gps = if (hasFineLocation || hasCoarseLocation) {
+                            try {
+                                lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                            } catch (_: SecurityException) {
+                                null
+                            }
+                        } else {
+                            null
+                        }
+                         Log.i(tag, "location/system gps=$gps")
+
+                         val req = LocationUpdateRequest(
+                            deviceCode = deviceCode,
+                            latitude = gps?.latitude ?: 0.0,
+                            longitude = gps?.longitude ?: 0.0,
+                            accuracyMeters = gps?.accuracy?.toDouble() ?: 0.0
                         )
+                        Log.i(tag, "location/send lat=${req.latitude} lon=${req.longitude} acc=${req.accuracyMeters}")
+
+                        val token = getOrRefreshToken(deviceCode)
+                        api.updateLocation(token = token, req = req)
                     } catch (e: MdmApi.ApiException) {
                         if (isDeviceCodeMismatch(e)) clearToken()
-                    } catch (_: Throwable) {
+                    } catch (t: Throwable) {
+                        Log.e(tag, "location loop unexpected failure", t)
                     }
                 }
                 delay(60_000L)
