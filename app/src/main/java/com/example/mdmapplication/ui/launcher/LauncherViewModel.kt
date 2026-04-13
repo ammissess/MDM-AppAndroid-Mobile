@@ -1,10 +1,14 @@
 package com.example.mdmapplication.ui.launcher
 
 import android.app.ActivityManager
+import android.app.admin.DevicePolicyManager
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.location.LocationManager
@@ -29,6 +33,7 @@ import com.example.mdmapplication.data.remote.LocationUpdateRequest
 import com.example.mdmapplication.data.remote.MdmApi
 import com.example.mdmapplication.data.remote.UsageBatchReportRequest
 import com.example.mdmapplication.device.DevicePolicyHelper
+import com.example.mdmapplication.device.MyDeviceAdminReceiver
 import com.example.mdmapplication.model.LauncherApp
 import com.example.mdmapplication.util.readBatteryInfo
 import kotlinx.coroutines.CancellationException
@@ -276,6 +281,37 @@ class LauncherViewModel : ViewModel() {
         val success: Boolean,
         val error: String? = null,
         val errorCode: String? = null
+    )
+
+    private enum class AllowedAppReasonCode {
+        LAUNCHABLE,
+        INSTALLED_NON_LAUNCHABLE,
+        NOT_INSTALLED,
+        HIDDEN,
+        SUSPENDED,
+        PACKAGE_VISIBILITY_BLOCKED
+    }
+
+    private enum class PackageProbeStatus {
+        PRESENT,
+        NOT_FOUND,
+        SECURITY_EXCEPTION,
+        UNKNOWN_ERROR
+    }
+
+    private data class PackageProbeResult(
+        val applicationInfo: ApplicationInfo? = null,
+        val status: PackageProbeStatus
+    )
+
+    private data class AllowedAppResolution(
+        val packageName: String,
+        val launcherApp: LauncherApp? = null,
+        val exists: Boolean?,
+        val hasLaunchIntent: Boolean,
+        val hidden: Boolean?,
+        val suspended: Boolean?,
+        val reasonCode: AllowedAppReasonCode
     )
 
     private suspend fun loadConfig(context: Context, source: String): ConfigLoadResult {
@@ -1014,37 +1050,220 @@ class LauncherViewModel : ViewModel() {
     }
 
     private fun loadAllowedApps(context: Context, packages: List<String>): List<LauncherApp> {
-        val pm = context.packageManager
-        val resolvedApps = mutableListOf<LauncherApp>()
-        val unresolved = mutableListOf<String>()
+        val resolutions = packages.map { resolveAllowedApp(context, it.trim()) }
 
-        packages.forEach { pkg ->
-            val app = runCatching {
-                val info = pm.getApplicationInfo(pkg, 0)
-                LauncherApp(
-                    packageName = pkg,
-                    label = pm.getApplicationLabel(info).toString(),
-                    icon = pm.getApplicationIcon(info)
-                )
-            }.onFailure { err ->
-                Log.w(tag, "Allowed package cannot be resolved: $pkg", err)
-            }.getOrNull()
+        resolutions.forEach(::logAllowedAppResolution)
 
-            if (app != null) {
-                resolvedApps += app
-            } else {
-                unresolved += pkg
-            }
-        }
+        val resolvedApps = resolutions.mapNotNull { it.launcherApp }
+        val excluded = resolutions
+            .filter { it.launcherApp == null }
+            .map { "${it.packageName}:${it.reasonCode.name}" }
 
         if (resolvedApps.isEmpty() && packages.isNotEmpty()) {
-            val first = unresolved.firstOrNull() ?: packages.first()
-            val msg = "Allowed package not installed or still hidden: $first"
+            val firstExcluded = resolutions.firstOrNull { it.launcherApp == null }
+            val msg = if (firstExcluded != null) {
+                "Allowed package unavailable: ${firstExcluded.packageName} (${firstExcluded.reasonCode.name})"
+            } else {
+                "Allowed apps unavailable"
+            }
             _state.value = _state.value.copy(error = msg)
-            Log.w(tag, "All allowed packages unresolved. allowed=$packages unresolved=$unresolved")
+            Log.w(tag, "All allowed packages excluded. allowed=$packages excluded=$excluded")
         }
 
         return resolvedApps
+    }
+
+    private fun resolveAllowedApp(context: Context, packageName: String): AllowedAppResolution {
+        if (packageName.isBlank()) {
+            return AllowedAppResolution(
+                packageName = packageName,
+                exists = false,
+                hasLaunchIntent = false,
+                hidden = false,
+                suspended = false,
+                reasonCode = AllowedAppReasonCode.NOT_INSTALLED
+            )
+        }
+
+        val pm = context.packageManager
+        val launchIntent = runCatching { pm.getLaunchIntentForPackage(packageName) }
+            .onFailure { err ->
+                Log.w(tag, "getLaunchIntentForPackage failed package=$packageName", err)
+            }
+            .getOrNull()
+        val launcherResolve = queryLauncherActivity(pm, packageName)
+        val launchIntentAppInfo = runCatching { launchIntent?.resolveActivityInfo(pm, 0)?.applicationInfo }
+            .onFailure { err ->
+                Log.w(tag, "resolveActivityInfo failed package=$packageName", err)
+            }
+            .getOrNull()
+        val probe = probePackage(pm, packageName)
+        val packageConfirmedAbsent =
+            probe.status == PackageProbeStatus.NOT_FOUND && launcherResolve == null && launchIntent == null
+        val hidden = if (packageConfirmedAbsent) {
+            false
+        } else {
+            readHiddenState(context, packageName)
+        }
+        val appInfo = launcherResolve?.activityInfo?.applicationInfo ?: launchIntentAppInfo ?: probe.applicationInfo
+        val suspended = if (packageConfirmedAbsent) {
+            false
+        } else {
+            readSuspendedState(appInfo)
+        }
+        val exists = inferExists(
+            hidden = hidden,
+            launcherResolve = launcherResolve,
+            launchIntent = launchIntent,
+            probe = probe
+        )
+
+        val reasonCode = when {
+            packageConfirmedAbsent -> AllowedAppReasonCode.NOT_INSTALLED
+            hidden == true -> AllowedAppReasonCode.HIDDEN
+            suspended == true -> AllowedAppReasonCode.SUSPENDED
+            launcherResolve != null || launchIntent != null -> AllowedAppReasonCode.LAUNCHABLE
+            probe.status == PackageProbeStatus.PRESENT -> AllowedAppReasonCode.INSTALLED_NON_LAUNCHABLE
+            else -> AllowedAppReasonCode.PACKAGE_VISIBILITY_BLOCKED
+        }
+
+        val launcherApp = if (reasonCode == AllowedAppReasonCode.LAUNCHABLE) {
+            buildLauncherApp(pm, packageName, launcherResolve, appInfo)
+        } else {
+            null
+        }
+
+        if (launcherApp == null && reasonCode == AllowedAppReasonCode.LAUNCHABLE) {
+            return AllowedAppResolution(
+                packageName = packageName,
+                exists = exists,
+                hasLaunchIntent = launchIntent != null,
+                hidden = hidden,
+                suspended = suspended,
+                reasonCode = AllowedAppReasonCode.PACKAGE_VISIBILITY_BLOCKED
+            )
+        }
+
+        return AllowedAppResolution(
+            packageName = packageName,
+            launcherApp = launcherApp,
+            exists = exists,
+            hasLaunchIntent = launchIntent != null,
+            hidden = hidden,
+            suspended = suspended,
+            reasonCode = reasonCode
+        )
+    }
+
+    private fun queryLauncherActivity(pm: PackageManager, packageName: String): ResolveInfo? {
+        val intent = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .setPackage(packageName)
+
+        return runCatching {
+            pm.queryIntentActivities(intent, 0)
+                .firstOrNull { it.activityInfo?.exported == true && it.activityInfo?.enabled == true }
+        }.onFailure { err ->
+            Log.w(tag, "queryIntentActivities failed package=$packageName", err)
+        }.getOrNull()
+    }
+
+    private fun probePackage(pm: PackageManager, packageName: String): PackageProbeResult {
+        return try {
+            val info = pm.getApplicationInfo(
+                packageName,
+                PackageManager.MATCH_DISABLED_COMPONENTS or PackageManager.MATCH_UNINSTALLED_PACKAGES
+            )
+            PackageProbeResult(applicationInfo = info, status = PackageProbeStatus.PRESENT)
+        } catch (e: PackageManager.NameNotFoundException) {
+            PackageProbeResult(status = PackageProbeStatus.NOT_FOUND)
+        } catch (e: SecurityException) {
+            Log.w(tag, "getApplicationInfo blocked package=$packageName", e)
+            PackageProbeResult(status = PackageProbeStatus.SECURITY_EXCEPTION)
+        } catch (t: Throwable) {
+            Log.w(tag, "getApplicationInfo failed package=$packageName", t)
+            PackageProbeResult(status = PackageProbeStatus.UNKNOWN_ERROR)
+        }
+    }
+
+    private fun readHiddenState(context: Context, packageName: String): Boolean? {
+        val policy = DevicePolicyHelper(context)
+        if (!policy.isDeviceOwner()) return null
+
+        return runCatching {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val admin = ComponentName(context, MyDeviceAdminReceiver::class.java)
+            dpm.isApplicationHidden(admin, packageName)
+        }.onFailure { err ->
+            Log.w(tag, "isApplicationHidden failed package=$packageName", err)
+        }.getOrNull()
+    }
+
+    private fun readSuspendedState(applicationInfo: ApplicationInfo?): Boolean? {
+        if (applicationInfo == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return null
+        return (applicationInfo.flags and ApplicationInfo.FLAG_SUSPENDED) != 0
+    }
+
+    private fun inferExists(
+        hidden: Boolean?,
+        launcherResolve: ResolveInfo?,
+        launchIntent: Intent?,
+        probe: PackageProbeResult
+    ): Boolean? {
+        return when {
+            probe.status == PackageProbeStatus.NOT_FOUND -> false
+            launcherResolve != null || launchIntent != null -> true
+            probe.status == PackageProbeStatus.PRESENT -> true
+            hidden == true -> true
+            else -> null
+        }
+    }
+
+    private fun buildLauncherApp(
+        pm: PackageManager,
+        packageName: String,
+        launcherResolve: ResolveInfo?,
+        applicationInfo: ApplicationInfo?
+    ): LauncherApp? {
+        val label = when {
+            launcherResolve != null -> launcherResolve.loadLabel(pm)?.toString()
+            applicationInfo != null -> pm.getApplicationLabel(applicationInfo).toString()
+            else -> null
+        }?.takeIf { it.isNotBlank() } ?: packageName
+
+        val icon = when {
+            launcherResolve != null -> launcherResolve.loadIcon(pm)
+            applicationInfo != null -> pm.getApplicationIcon(applicationInfo)
+            else -> null
+        } ?: return null
+
+        return LauncherApp(
+            packageName = packageName,
+            label = label,
+            icon = icon
+        )
+    }
+
+    private fun logAllowedAppResolution(resolution: AllowedAppResolution) {
+        val logLine = "allowedApps resolution " +
+                "packageName=${resolution.packageName} " +
+                "exists=${triStateLabel(resolution.exists)} " +
+                "launchIntent=${resolution.hasLaunchIntent} " +
+                "hidden=${triStateLabel(resolution.hidden)} " +
+                "suspended=${triStateLabel(resolution.suspended)} " +
+                "reasonCode=${resolution.reasonCode.name}"
+
+        if (resolution.launcherApp != null) {
+            Log.i(tag, logLine)
+        } else {
+            Log.w(tag, logLine)
+        }
+    }
+
+    private fun triStateLabel(value: Boolean?): String = when (value) {
+        true -> "true"
+        false -> "false"
+        null -> "unknown"
     }
 
     private data class AppUsageEntry(

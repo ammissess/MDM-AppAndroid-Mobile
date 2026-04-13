@@ -30,8 +30,36 @@ class DevicePolicyHelper(private val context: Context) {
 
     private fun isSelfPackage(packageName: String): Boolean = packageName == selfPackage
 
+    private data class ManagedPackageState(
+        val present: Boolean,
+        val hidden: Boolean?,
+        val suspended: Boolean?
+    )
+
+    private fun packageInfoFlags(): Int =
+        PackageManager.MATCH_DISABLED_COMPONENTS or PackageManager.MATCH_UNINSTALLED_PACKAGES
+
     private fun packageExists(pm: PackageManager, pkg: String): Boolean =
-        runCatching { pm.getApplicationInfo(pkg, 0); true }.getOrDefault(false)
+        runCatching { pm.getApplicationInfo(pkg, packageInfoFlags()); true }.getOrDefault(false)
+
+    private fun readManagedPackageState(pm: PackageManager, packageName: String): ManagedPackageState {
+        val info = runCatching { pm.getApplicationInfo(packageName, packageInfoFlags()) }.getOrNull()
+        val hidden = if (info != null) {
+            runCatching { dpm.isApplicationHidden(admin, packageName) }.getOrNull()
+        } else {
+            null
+        }
+        val suspended = if (info != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            (info.flags and ApplicationInfo.FLAG_SUSPENDED) != 0
+        } else {
+            null
+        }
+        return ManagedPackageState(
+            present = info != null,
+            hidden = hidden,
+            suspended = suspended
+        )
+    }
 
     private fun restorePackage(packageName: String) {
         if (packageName.isBlank()) return
@@ -351,16 +379,20 @@ class DevicePolicyHelper(private val context: Context) {
             explicitAllowed.remove("com.android.settings")
         }
 
-        val keep = mutableSetOf<String>().apply {
+        val requestedKeep = mutableSetOf<String>().apply {
             add(selfPackage)
             add(launcherPackage)
             addAll(explicitAllowed)
             addAll(minimumSystemSafelist(pm))
             addAll(imePkgs)
-        }.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
+        }
+        val keep = requestedKeep.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
+        val missingAllowed = explicitAllowed.filterNot { it in keep }
+        missingAllowed.forEach { pkg ->
+            Log.w(tag, "enforceAllowedPackages allowlisted package not present in PackageManager package=$pkg")
+        }
 
         restoreSelfBeforePolicyStrict()
-        restorePackagesStrict(keep)
 
         val managedCandidates = manageableCandidates(
             currentLaunchables = currentLaunchables,
@@ -375,22 +407,28 @@ class DevicePolicyHelper(private val context: Context) {
         val restrictCandidates = removeSelfFromSet(restrictCandidatesBase)
 
         val restored = mutableListOf<String>()
-        val hidden = mutableListOf<String>()
-        val suspended = mutableListOf<String>()
+        val restoredFromHidden = mutableListOf<String>()
+        val restoredFromSuspended = mutableListOf<String>()
 
         keep.forEach { pkg ->
             if (isSelfPackage(pkg)) return@forEach
 
-            runPolicyOrThrow("setApplicationHidden(false)[$pkg]") {
-                dpm.setApplicationHidden(admin, pkg, false)
-            }
+            val beforeState = readManagedPackageState(pm, pkg)
+            restorePackageStrict(pkg)
+            val afterState = readManagedPackageState(pm, pkg)
             restored += pkg
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                runPolicyOrThrow("setPackagesSuspended(false)[$pkg]") {
-                    dpm.setPackagesSuspended(admin, arrayOf(pkg), false)
-                }
+            if (beforeState.hidden == true && afterState.hidden == false) {
+                restoredFromHidden += pkg
             }
+            if (beforeState.suspended == true && afterState.suspended == false) {
+                restoredFromSuspended += pkg
+            }
+            Log.i(
+                tag,
+                "enforceAllowedPackages restore package=$pkg presentBefore=${beforeState.present} " +
+                        "hiddenBefore=${beforeState.hidden} suspendedBefore=${beforeState.suspended} " +
+                        "presentAfter=${afterState.present} hiddenAfter=${afterState.hidden} suspendedAfter=${afterState.suspended}"
+            )
         }
 
         // Active mode only: do not infer containment from empty allowlist.
@@ -408,7 +446,8 @@ class DevicePolicyHelper(private val context: Context) {
             "enforceAllowedPackages done | self=$selfPackage lockedContainment=$lockedContainment " +
                     "keep=${keep.size} ime=${imePkgs.size} managedCandidates=${managedCandidates.size} " +
                     "restrictCandidates=${restrictCandidates.size} restored=${restored.size} " +
-                    "hidden=${hidden.size} suspended=${suspended.size} selfInRestrict=${restrictCandidates.any(::isSelfPackage)}"
+                    "restoredFromHidden=${restoredFromHidden.size} restoredFromSuspended=${restoredFromSuspended.size} " +
+                    "missingAllowed=${missingAllowed.size} selfInRestrict=${restrictCandidates.any(::isSelfPackage)}"
         )
     }
 
