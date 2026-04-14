@@ -152,6 +152,34 @@ data class DeviceAckCommandResponse(
 )
 
 @Serializable
+data class DeviceAppInventoryItem(
+    val packageName: String,
+    val appName: String? = null,
+    val versionName: String? = null,
+    val versionCode: Long? = null,
+    val isSystemApp: Boolean? = null,
+    val hasLauncherActivity: Boolean? = null,
+    val installed: Boolean = true,
+    val disabled: Boolean? = null,
+    val hidden: Boolean? = null,
+    val suspended: Boolean? = null
+)
+
+@Serializable
+data class DeviceAppInventoryReportRequest(
+    val deviceCode: String,
+    val reportedAtEpochMillis: Long,
+    val items: List<DeviceAppInventoryItem>
+)
+
+@Serializable
+data class DeviceAppInventoryReportResponse(
+    val ok: Boolean,
+    val upserted: Int,
+    val updatedAtEpochMillis: Long
+)
+
+@Serializable
 data class ApiErrorResponse(
     val error: String? = null,
     val code: String? = null

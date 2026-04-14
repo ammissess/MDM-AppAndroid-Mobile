@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.ConnectivityManager
@@ -23,6 +24,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mdmapplication.BuildConfig
 import com.example.mdmapplication.data.remote.DeviceAckCommandRequest
+import com.example.mdmapplication.data.remote.DeviceAppInventoryItem
+import com.example.mdmapplication.data.remote.DeviceAppInventoryReportRequest
 import com.example.mdmapplication.data.remote.DeviceConfigResponse
 import com.example.mdmapplication.data.remote.DeviceEventRequest
 import com.example.mdmapplication.data.remote.DevicePolicyStateReportRequest
@@ -356,6 +359,7 @@ class LauncherViewModel : ViewModel() {
                 startCommandPollLoop(context)
                 startStateSnapshotLoop(context)
                 runCatching { reportStateSnapshotNow(context, deviceCode, token) }
+                runCatching { reportAppInventoryNow(context, deviceCode, token) }
                 Log.i(
                     tag,
                     "loadConfig exit success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} commandPollActive=${commandPollJob?.isActive == true}"
@@ -795,6 +799,34 @@ class LauncherViewModel : ViewModel() {
         }
     }
 
+    private suspend fun reportAppInventoryNow(context: Context, deviceCode: String, token: String) {
+        val items = collectInstalledAppInventory(context)
+        Log.i(tag, "inventory report start deviceCode=$deviceCode itemCount=${items.size}")
+
+        try {
+            val response = api.reportAppInventory(
+                token = token,
+                req = DeviceAppInventoryReportRequest(
+                    deviceCode = deviceCode,
+                    reportedAtEpochMillis = System.currentTimeMillis(),
+                    items = items
+                )
+            )
+            Log.i(
+                tag,
+                "inventory report success deviceCode=$deviceCode itemCount=${items.size} upserted=${response.upserted}"
+            )
+        } catch (e: MdmApi.ApiException) {
+            if (isDeviceCodeMismatch(e)) clearIdentitySession()
+            Log.w(
+                tag,
+                "inventory report fail deviceCode=$deviceCode itemCount=${items.size} code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}"
+            )
+        } catch (t: Throwable) {
+            Log.w(tag, "inventory report fail deviceCode=$deviceCode itemCount=${items.size}", t)
+        }
+    }
+
     private fun readNetworkType(context: Context): String {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val activeNetwork = cm.activeNetwork ?: return "OFFLINE"
@@ -832,6 +864,116 @@ class LauncherViewModel : ViewModel() {
             val canonicalJson = buildCanonicalConfigJson(config)
             sha256Hex(canonicalJson)
         }.getOrNull()
+    }
+
+    private fun collectInstalledAppInventory(context: Context): List<DeviceAppInventoryItem> {
+        val pm = context.packageManager
+        val launchablePackages = collectLaunchablePackages(pm)
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val admin = ComponentName(context, MyDeviceAdminReceiver::class.java)
+        val isOwner = dpm.isDeviceOwnerApp(context.packageName)
+
+        return getInstalledApplicationsCompat(pm)
+            .asSequence()
+            .map { appInfo ->
+                val packageInfo = getPackageInfoCompat(pm, appInfo.packageName)
+                DeviceAppInventoryItem(
+                    packageName = appInfo.packageName,
+                    appName = readApplicationLabel(pm, appInfo),
+                    versionName = packageInfo?.versionName?.takeIf { !it.isNullOrBlank() },
+                    versionCode = packageInfo?.let(::readVersionCode),
+                    isSystemApp = readSystemAppState(appInfo),
+                    hasLauncherActivity = appInfo.packageName in launchablePackages,
+                    installed = readInstalledState(appInfo),
+                    disabled = readDisabledState(pm, appInfo),
+                    hidden = readHiddenStateForInventory(dpm, admin, isOwner, appInfo.packageName),
+                    suspended = readSuspendedState(appInfo)
+                )
+            }
+            .sortedBy { it.packageName }
+            .toList()
+    }
+
+    private fun collectLaunchablePackages(pm: PackageManager): Set<String> {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return runCatching {
+            pm.queryIntentActivities(intent, 0)
+                .mapNotNull { it.activityInfo?.packageName }
+                .toSet()
+        }.getOrElse {
+            Log.w(tag, "collectLaunchablePackages failed", it)
+            emptySet()
+        }
+    }
+
+    private fun getInstalledApplicationsCompat(pm: PackageManager): List<ApplicationInfo> {
+        val flags = PackageManager.MATCH_DISABLED_COMPONENTS or PackageManager.MATCH_UNINSTALLED_PACKAGES
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(flags.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(flags)
+        }
+    }
+
+    private fun getPackageInfoCompat(pm: PackageManager, packageName: String): PackageInfo? {
+        val flags = PackageManager.MATCH_DISABLED_COMPONENTS.toLong()
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(flags))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, flags.toInt())
+            }
+        }.getOrNull()
+    }
+
+    private fun readApplicationLabel(pm: PackageManager, appInfo: ApplicationInfo): String? {
+        return runCatching {
+            pm.getApplicationLabel(appInfo).toString().trim().takeIf { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    private fun readVersionCode(packageInfo: PackageInfo): Long {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
+    }
+
+    private fun readSystemAppState(appInfo: ApplicationInfo): Boolean {
+        val systemFlags = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+        return (appInfo.flags and systemFlags) != 0
+    }
+
+    private fun readInstalledState(appInfo: ApplicationInfo): Boolean {
+        return (appInfo.flags and ApplicationInfo.FLAG_INSTALLED) != 0
+    }
+
+    private fun readDisabledState(pm: PackageManager, appInfo: ApplicationInfo): Boolean? {
+        return runCatching {
+            when (pm.getApplicationEnabledSetting(appInfo.packageName)) {
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED -> true
+
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> false
+                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> !appInfo.enabled
+                else -> !appInfo.enabled
+            }
+        }.getOrElse { !appInfo.enabled }
+    }
+
+    private fun readHiddenStateForInventory(
+        dpm: DevicePolicyManager,
+        admin: ComponentName,
+        isOwner: Boolean,
+        packageName: String
+    ): Boolean? {
+        if (!isOwner) return null
+        return runCatching { dpm.isApplicationHidden(admin, packageName) }.getOrNull()
     }
 
     private fun buildCanonicalConfigJson(config: DeviceConfigResponse): String {

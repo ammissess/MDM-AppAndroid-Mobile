@@ -115,6 +115,13 @@ class MdmApi(private val baseUrl: String) {
             setBody(req)
         }.bodyOrThrow()
 
+    suspend fun reportAppInventory(token: String, req: DeviceAppInventoryReportRequest): DeviceAppInventoryReportResponse =
+        client.post("$baseUrl/api/device/apps/inventory") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
+
     suspend fun reportStateSnapshot(token: String, req: DeviceStateSnapshotRequest): DeviceStateSnapshotResponse =
         client.post("$baseUrl/api/device/state") {
             header("Authorization", "Bearer $token")
