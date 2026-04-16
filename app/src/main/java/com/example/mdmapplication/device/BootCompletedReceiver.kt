@@ -23,15 +23,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
                     else -> "broadcast:UNKNOWN"
                 }
 
-                val launch = Intent(context, LauncherActivity::class.java).apply {
-                    this.action = LauncherActivity.ACTION_RUNTIME_WAKE
-                    putExtra(LauncherActivity.EXTRA_WAKE_REASON, wakeReason)
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    )
-                }
+                val launch = LauncherActivity.createRuntimeWakeIntent(context, wakeReason)
                 runCatching { context.startActivity(launch) }
                     .onSuccess { Log.i(tag, "wake-up launcher start requested reason=$wakeReason") }
                     .onFailure { Log.w(tag, "wake-up launcher start failed reason=$wakeReason", it) }

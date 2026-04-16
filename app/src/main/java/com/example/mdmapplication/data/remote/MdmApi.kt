@@ -135,4 +135,11 @@ class MdmApi(private val baseUrl: String) {
             contentType(ContentType.Application.Json)
             setBody(req)
         }.bodyOrThrow()
+
+    suspend fun upsertFcmToken(token: String, req: DeviceFcmTokenUpsertRequest): DeviceFcmTokenUpsertResponse =
+        client.post("$baseUrl/api/device/fcm-token") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.bodyOrThrow()
 }

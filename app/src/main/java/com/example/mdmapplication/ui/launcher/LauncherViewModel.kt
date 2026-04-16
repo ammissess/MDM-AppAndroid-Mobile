@@ -17,7 +17,6 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.StatFs
-import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -36,7 +35,9 @@ import com.example.mdmapplication.data.remote.LocationUpdateRequest
 import com.example.mdmapplication.data.remote.MdmApi
 import com.example.mdmapplication.data.remote.UsageBatchReportRequest
 import com.example.mdmapplication.device.DevicePolicyHelper
+import com.example.mdmapplication.device.DeviceRuntimeIdentity
 import com.example.mdmapplication.device.MyDeviceAdminReceiver
+import com.example.mdmapplication.device.syncPendingFcmToken
 import com.example.mdmapplication.model.LauncherApp
 import com.example.mdmapplication.util.readBatteryInfo
 import kotlinx.coroutines.CancellationException
@@ -78,9 +79,9 @@ class LauncherViewModel : ViewModel() {
     private val _commandActions = MutableSharedFlow<LauncherCommandAction>(extraBufferCapacity = 16)
     val commandActions = _commandActions.asSharedFlow()
 
-    private val api = MdmApi(baseUrl = "http://10.0.2.2:8080")
-    private val deviceUser = "device"
-    private val devicePass = "device123"
+    private val api = MdmApi(baseUrl = DeviceRuntimeIdentity.BASE_URL)
+    private val deviceUser = DeviceRuntimeIdentity.DEVICE_USER
+    private val devicePass = DeviceRuntimeIdentity.DEVICE_PASS
     private val tag = "LauncherViewModel"
 
     private var cachedToken: String? = null
@@ -158,6 +159,10 @@ class LauncherViewModel : ViewModel() {
                     req = buildRegisterRequest(context, deviceCode)
                 )
                 Log.i(tag, "register result refreshId=$refreshId status=${registerResp.status}")
+                runCatching { syncPendingFcmToken(context = context, api = api, authToken = token, deviceCode = deviceCode) }
+                    .onFailure { syncErr ->
+                        Log.w(tag, "fcm token sync skipped refreshId=$refreshId deviceCode=$deviceCode", syncErr)
+                    }
                 runCatching {
                     api.sendEvent(
                         token = token,
@@ -1201,7 +1206,7 @@ class LauncherViewModel : ViewModel() {
     }
 
     private fun resolveCurrentDeviceCode(context: Context, reason: String): String {
-        val current = getDeviceCode(context)
+        val current = DeviceRuntimeIdentity.getDeviceCode(context)
         val previous = cachedDeviceCode
         if (previous != null && previous != current) {
             Log.w(tag, "deviceCode changed reason=$reason old=$previous new=$current -> clear session")
@@ -1209,28 +1214,6 @@ class LauncherViewModel : ViewModel() {
         }
         cachedDeviceCode = current
         return current
-    }
-
-    private fun getDeviceCode(context: Context): String {
-        val fromDefault = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-        val fromDeviceProtected = runCatching {
-            Settings.Secure.getString(
-                context.createDeviceProtectedStorageContext().contentResolver,
-                Settings.Secure.ANDROID_ID
-            )
-        }.getOrNull()
-
-        val selected = when {
-            !fromDeviceProtected.isNullOrBlank() -> fromDeviceProtected
-            !fromDefault.isNullOrBlank() -> fromDefault
-            else -> "UNKNOWN"
-        }
-
-        Log.i(
-            tag,
-            "getDeviceCode source default=$fromDefault deviceProtected=$fromDeviceProtected selected=$selected"
-        )
-        return selected
     }
 
     private fun buildRegisterRequest(context: Context, deviceCode: String): DeviceRegisterRequest {

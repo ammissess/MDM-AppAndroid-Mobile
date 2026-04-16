@@ -237,3 +237,17 @@ data class DevicePolicyStateResponse(
     val status: String
 )
 
+@Serializable
+data class DeviceFcmTokenUpsertRequest(
+    val deviceCode: String,
+    val fcmToken: String,
+    val appVersion: String? = null,
+    val updatedAtEpochMillis: Long
+)
+
+@Serializable
+data class DeviceFcmTokenUpsertResponse(
+    val ok: Boolean,
+    val updatedAtEpochMillis: Long
+)
+

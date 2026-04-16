@@ -200,5 +200,16 @@ class LauncherActivity : ComponentActivity() {
     companion object {
         const val ACTION_RUNTIME_WAKE = "com.example.mdmapplication.action.RUNTIME_WAKE"
         const val EXTRA_WAKE_REASON = "extra_wake_reason"
+
+        fun createRuntimeWakeIntent(context: Context, reason: String): Intent =
+            Intent(context, LauncherActivity::class.java).apply {
+                action = ACTION_RUNTIME_WAKE
+                putExtra(EXTRA_WAKE_REASON, reason)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
     }
 }
