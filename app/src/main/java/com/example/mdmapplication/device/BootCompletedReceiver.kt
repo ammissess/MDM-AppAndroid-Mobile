@@ -10,13 +10,22 @@ class BootCompletedReceiver : BroadcastReceiver() {
     private val tag = "BootCompletedReceiver"
 
     override fun onReceive(context: Context, intent: Intent) {
-        Log.i(tag, "onReceive action=${intent.action}")
-        when (intent.action) {
+        val action = intent.action
+        Log.i(tag, "wake-up receiver action=$action")
+        when (action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                val wakeReason = when (action) {
+                    Intent.ACTION_BOOT_COMPLETED -> "broadcast:BOOT_COMPLETED"
+                    Intent.ACTION_LOCKED_BOOT_COMPLETED -> "broadcast:LOCKED_BOOT_COMPLETED"
+                    Intent.ACTION_MY_PACKAGE_REPLACED -> "broadcast:PACKAGE_REPLACED"
+                    else -> "broadcast:UNKNOWN"
+                }
 
                 val launch = Intent(context, LauncherActivity::class.java).apply {
+                    this.action = LauncherActivity.ACTION_RUNTIME_WAKE
+                    putExtra(LauncherActivity.EXTRA_WAKE_REASON, wakeReason)
                     addFlags(
                         Intent.FLAG_ACTIVITY_NEW_TASK or
                                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -24,8 +33,8 @@ class BootCompletedReceiver : BroadcastReceiver() {
                     )
                 }
                 runCatching { context.startActivity(launch) }
-                    .onSuccess { Log.i(tag, "onReceive launcher start requested") }
-                    .onFailure { Log.w(tag, "onReceive launcher start failed", it) }
+                    .onSuccess { Log.i(tag, "wake-up launcher start requested reason=$wakeReason") }
+                    .onFailure { Log.w(tag, "wake-up launcher start failed reason=$wakeReason", it) }
             }
         }
     }

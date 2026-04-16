@@ -1,6 +1,9 @@
 package com.example.mdmapplication.ui.launcher
 
 import android.app.admin.DevicePolicyManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -20,8 +23,8 @@ import kotlinx.coroutines.launch
 class LauncherActivity : ComponentActivity() {
 
     private val viewModel: LauncherViewModel by viewModels()
-    private var lastRefreshTriggerAtMs: Long = 0L
     private val tag = "LauncherActivity"
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,7 +38,8 @@ class LauncherActivity : ComponentActivity() {
             policy.clearPersistentPreferredActivities()
         }
 
-        triggerRefreshFromBackend("onCreate")
+        val wakeReason = parseWakeReason(intent) ?: "app_launch:onCreate"
+        triggerRuntimeWake(reason = wakeReason, force = true)
 
         lifecycleScope.launch {
             viewModel.commandActions.collectLatest { action ->
@@ -92,7 +96,7 @@ class LauncherActivity : ComponentActivity() {
                             if (isDo) policy.clearPersistentPreferredActivities()
                         },
                         onApplyKioskHome = {
-                            triggerRefreshFromBackend("manualApplyKioskHome")
+                            triggerRuntimeWake("manualApplyKioskHome", force = true)
                         },
                         onExitLockTask = { runCatching { stopLockTask() } }
                     )
@@ -102,23 +106,35 @@ class LauncherActivity : ComponentActivity() {
                     LoadingOrErrorScreen(
                         loading = st.loading,
                         error = st.error,
-                        onRetry = { viewModel.refreshFromBackend(this@LauncherActivity) }
+                        onRetry = { triggerRuntimeWake("manualRetry", force = true) }
                     )
                 }
             }
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        registerNetworkCallback()
+    }
+
     override fun onResume() {
         super.onResume()
         Log.i(tag, "onResume taskId=$taskId")
-        triggerRefreshFromBackend("onResume")
+        triggerRuntimeWake("ui:onResume")
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         Log.i(tag, "onNewIntent action=${intent.action} taskId=$taskId")
-        triggerRefreshFromBackend("onNewIntent")
+        val wakeReason = parseWakeReason(intent) ?: "ui:onNewIntent"
+        triggerRuntimeWake(wakeReason)
+    }
+
+    override fun onStop() {
+        unregisterNetworkCallback()
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -139,14 +155,50 @@ class LauncherActivity : ComponentActivity() {
         )
     }
 
-    private fun triggerRefreshFromBackend(reason: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastRefreshTriggerAtMs < 2_000L) {
-            Log.i(tag, "skip refreshFromBackend reason=$reason (debounced)")
-            return
+    private fun triggerRuntimeWake(reason: String, force: Boolean = false) {
+        Log.i(tag, "runtime retrigger reason=$reason force=$force")
+        viewModel.requestRuntimeWake(context = this, reason = reason, force = force)
+    }
+
+    private fun parseWakeReason(intent: Intent?): String? {
+        if (intent == null) return null
+        if (intent.action == ACTION_RUNTIME_WAKE) {
+            return intent.getStringExtra(EXTRA_WAKE_REASON) ?: "broadcast:unknown"
         }
-        lastRefreshTriggerAtMs = now
-        Log.i(tag, "trigger refreshFromBackend reason=$reason")
-        viewModel.refreshFromBackend(this)
+        return null
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val caps = cm.getNetworkCapabilities(network)
+                val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                if (hasInternet) {
+                    triggerRuntimeWake("network:return")
+                }
+            }
+        }
+
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
+            .onSuccess {
+                networkCallback = callback
+                Log.i(tag, "network callback registered")
+            }
+            .onFailure { Log.w(tag, "network callback register failed", it) }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val callback = networkCallback ?: return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        runCatching { cm.unregisterNetworkCallback(callback) }
+            .onFailure { Log.w(tag, "network callback unregister failed", it) }
+        networkCallback = null
+    }
+
+    companion object {
+        const val ACTION_RUNTIME_WAKE = "com.example.mdmapplication.action.RUNTIME_WAKE"
+        const val EXTRA_WAKE_REASON = "extra_wake_reason"
     }
 }

@@ -92,14 +92,62 @@ class LauncherViewModel : ViewModel() {
     private var commandPollJob: Job? = null
     private var stateSnapshotJob: Job? = null
     private val configLoadMutex = Mutex()
+    private val runtimeWakeMutex = Mutex()
     private var refreshAttemptSeq: Long = 0
+    private var lastRuntimeWakeAtMs: Long = 0L
+    private var runtimeWakeInFlight: Boolean = false
     private val supportedCommandTypes = setOf("lock_screen", "refresh_config", "sync_config")
+    private val runtimeWakeDebounceMs = 2_000L
 
     fun refreshFromBackend(context: Context) {
+        requestRuntimeWake(context = context, reason = "manual_refresh", force = true)
+    }
+
+    fun requestRuntimeWake(context: Context, reason: String, force: Boolean = false) {
         viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val shouldRun = runtimeWakeMutex.withLock {
+                if (runtimeWakeInFlight) {
+                    Log.i(tag, "runtime wake-up coalesced reason=$reason inFlight=true")
+                    return@withLock false
+                }
+
+                val elapsed = now - lastRuntimeWakeAtMs
+                if (!force && elapsed in 0 until runtimeWakeDebounceMs) {
+                    Log.i(
+                        tag,
+                        "runtime wake-up skipped reason=$reason elapsedMs=$elapsed debounceMs=$runtimeWakeDebounceMs"
+                    )
+                    return@withLock false
+                }
+
+                runtimeWakeInFlight = true
+                lastRuntimeWakeAtMs = now
+                true
+            }
+
+            if (!shouldRun) return@launch
+
+            Log.i(tag, "runtime wake-up accepted reason=$reason force=$force")
+
+            try {
+                runRefreshFromBackend(context = context, triggerReason = reason)
+            } finally {
+                runtimeWakeMutex.withLock {
+                    runtimeWakeInFlight = false
+                }
+                Log.i(tag, "runtime wake-up finished reason=$reason")
+            }
+        }
+    }
+
+    private suspend fun runRefreshFromBackend(context: Context, triggerReason: String) {
             val deviceCode = resolveCurrentDeviceCode(context, reason = "refreshFromBackend")
             val refreshId = ++refreshAttemptSeq
-            Log.i(tag, "refreshFromBackend start refreshId=$refreshId deviceCode=$deviceCode")
+            Log.i(
+                tag,
+                "refresh start refreshId=$refreshId trigger=$triggerReason deviceCode=$deviceCode"
+            )
             _state.value = _state.value.copy(loading = true, error = null, unlockError = null)
 
             try {
@@ -145,7 +193,7 @@ class LauncherViewModel : ViewModel() {
                     }
 
                     "ACTIVE" -> {
-                        Log.i(tag, "refreshFromBackend ACTIVE refreshId=$refreshId -> loadConfig")
+                        Log.i(tag, "refresh ACTIVE refreshId=$refreshId -> loadConfig")
                         loadConfig(context, source = "refresh")
                     }
 
@@ -159,18 +207,19 @@ class LauncherViewModel : ViewModel() {
             } catch (e: MdmApi.ApiException) {
                 Log.e(
                     tag,
-                    "refreshFromBackend api failure refreshId=$refreshId code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
+                    "refresh api failure refreshId=$refreshId trigger=$triggerReason code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
                     e
                 )
                 handleApiException(e, duringConfig = false, context = context)
             } catch (t: Throwable) {
-                Log.e(tag, "refreshFromBackend failure refreshId=$refreshId", t)
+                Log.e(tag, "refresh failure refreshId=$refreshId trigger=$triggerReason", t)
                 _state.value = _state.value.copy(
                     loading = false,
                     error = t.message ?: "Lỗi kết nối"
                 )
+            } finally {
+                Log.i(tag, "refresh end refreshId=$refreshId trigger=$triggerReason")
             }
-        }
     }
 
     fun unlock(context: Context, password: String) {
@@ -325,7 +374,12 @@ class LauncherViewModel : ViewModel() {
                 val token = getOrRefreshToken(deviceCode)
                 val previousConfig = _state.value.config
 
+                Log.i(tag, "fetch config start source=$source deviceCode=$deviceCode")
                 val config = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+                Log.i(
+                    tag,
+                    "fetch config success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+                )
                 val appliedConfigHash = buildAppliedConfigHashOrNull(config)
 
                 val policyResult = applyPolicyAndReport(
@@ -422,8 +476,10 @@ class LauncherViewModel : ViewModel() {
     ): PolicyApplyResult {
         val policy = DevicePolicyHelper(context)
         val policyReportedAt = System.currentTimeMillis()
+        Log.i(tag, "apply policy start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
 
         if (!policy.isDeviceOwner()) {
+            Log.w(tag, "apply policy skipped deviceCode=$deviceCode ownerCheck=false")
             reportPolicyStateNow(
                 token = token,
                 req = DevicePolicyStateReportRequest(
@@ -471,8 +527,13 @@ class LauncherViewModel : ViewModel() {
                     policyAppliedAtEpochMillis = policyReportedAt
                 )
             )
+            Log.i(tag, "apply policy success deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
             return PolicyApplyResult(success = true)
         } catch (applyErr: Throwable) {
+            Log.w(
+                tag,
+                "apply policy failed deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} errorCode=POLICY_APPLY_FAILED message=${applyErr.message}"
+            )
             runCatching {
                 reportPolicyStateNow(
                     token = token,
@@ -497,9 +558,7 @@ class LauncherViewModel : ViewModel() {
         Log.i(tag, "startLocationLoop called active=${locationJob?.isActive == true}")
         if (locationJob?.isActive == true) return
         locationJob = viewModelScope.launch {
-            Log.i(tag, "location loop started")
             while (true) {
-                Log.i(tag, "location loop tick cachedDeviceCode=$cachedDeviceCode")
                 val deviceCode = cachedDeviceCode
                 if (deviceCode != null) {
                     try {
@@ -522,15 +581,12 @@ class LauncherViewModel : ViewModel() {
                         } else {
                             null
                         }
-                         Log.i(tag, "location/system gps=$gps")
-
                          val req = LocationUpdateRequest(
                             deviceCode = deviceCode,
                             latitude = gps?.latitude ?: 0.0,
                             longitude = gps?.longitude ?: 0.0,
                             accuracyMeters = gps?.accuracy?.toDouble() ?: 0.0
                         )
-                        Log.i(tag, "location/send lat=${req.latitude} lon=${req.longitude} acc=${req.accuracyMeters}")
 
                         val token = getOrRefreshToken(deviceCode)
                         api.updateLocation(token = token, req = req)
@@ -668,7 +724,7 @@ class LauncherViewModel : ViewModel() {
                             }.onSuccess {
                                 Log.i(
                                     tag,
-                                    "ack success commandId=${cmd.id} type=${cmd.type} result=${if (result.success) "SUCCESS" else "FAILED"}"
+                                    "ack result commandId=${cmd.id} type=${cmd.type} result=${if (result.success) "SUCCESS" else "FAILED"}"
                                 )
                             }.onFailure { ackErr ->
                                 Log.e(
@@ -790,11 +846,19 @@ class LauncherViewModel : ViewModel() {
     }
 
     private suspend fun reportPolicyStateNow(token: String, req: DevicePolicyStateReportRequest) {
+        Log.i(
+            tag,
+            "report policy-state start deviceCode=${req.deviceCode} status=${req.policyApplyStatus} appliedVersion=${req.appliedConfigVersionEpochMillis}"
+        )
         try {
             api.reportPolicyState(token = token, req = req)
-            Log.i(tag, "policy state sent deviceCode=${req.deviceCode} status=${req.policyApplyStatus}")
+            Log.i(tag, "report policy-state success deviceCode=${req.deviceCode} status=${req.policyApplyStatus}")
         } catch (e: MdmApi.ApiException) {
             if (isDeviceCodeMismatch(e)) clearIdentitySession()
+            Log.w(
+                tag,
+                "report policy-state failure deviceCode=${req.deviceCode} status=${req.policyApplyStatus} code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}"
+            )
             throw e
         }
     }
