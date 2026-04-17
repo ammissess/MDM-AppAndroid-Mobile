@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.location.Location
 import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
@@ -591,24 +592,43 @@ class LauncherViewModel : ViewModel() {
                             Manifest.permission.ACCESS_COARSE_LOCATION
                         ) == PackageManager.PERMISSION_GRANTED
 
-                        val gps = if (hasFineLocation || hasCoarseLocation) {
-                            try {
-                                lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                            } catch (_: SecurityException) {
-                                null
-                            }
-                        } else {
+                        if (!hasFineLocation && !hasCoarseLocation) {
+                            Log.i(tag, "location report skipped reason=no_location_permission deviceCode=$deviceCode")
+                            delay(60_000L)
+                            continue
+                        }
+
+                        val gps = try {
+                            lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                        } catch (_: SecurityException) {
                             null
                         }
-                         val req = LocationUpdateRequest(
+
+                        val validFix = gps?.toValidLocationFixOrNull()
+                        if (validFix == null) {
+                            val gpsEnabled = runCatching { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) }
+                                .getOrDefault(false)
+                            Log.i(
+                                tag,
+                                "location report skipped reason=no_valid_fix deviceCode=$deviceCode gpsEnabled=$gpsEnabled hasLocation=${gps != null}"
+                            )
+                            delay(60_000L)
+                            continue
+                        }
+
+                        val req = LocationUpdateRequest(
                             deviceCode = deviceCode,
-                            latitude = gps?.latitude ?: 0.0,
-                            longitude = gps?.longitude ?: 0.0,
-                            accuracyMeters = gps?.accuracy?.toDouble() ?: 0.0
+                            latitude = validFix.latitude,
+                            longitude = validFix.longitude,
+                            accuracyMeters = validFix.accuracyMeters
                         )
 
                         val token = getOrRefreshToken(deviceCode)
                         api.updateLocation(token = token, req = req)
+                        Log.i(
+                            tag,
+                            "location report sent deviceCode=$deviceCode provider=${validFix.provider} accuracyMeters=${validFix.accuracyMeters}"
+                        )
                     } catch (e: MdmApi.ApiException) {
                         if (isDeviceCodeMismatch(e)) clearToken()
                     } catch (t: Throwable) {
@@ -618,6 +638,31 @@ class LauncherViewModel : ViewModel() {
                 delay(60_000L)
             }
         }
+    }
+
+    private data class ValidLocationFix(
+        val latitude: Double,
+        val longitude: Double,
+        val accuracyMeters: Double,
+        val provider: String,
+    )
+
+    private fun Location.toValidLocationFixOrNull(): ValidLocationFix? {
+        val latitude = latitude
+        val longitude = longitude
+        val accuracyMeters = accuracy.toDouble()
+
+        if (!latitude.isFinite() || !longitude.isFinite()) return null
+        if (latitude !in -90.0..90.0 || longitude !in -180.0..180.0) return null
+        if (accuracyMeters <= 0.0) return null
+        if (latitude == 0.0 && longitude == 0.0 && accuracyMeters == 0.0) return null
+
+        return ValidLocationFix(
+            latitude = latitude,
+            longitude = longitude,
+            accuracyMeters = accuracyMeters,
+            provider = provider ?: LocationManager.GPS_PROVIDER,
+        )
     }
 
     private fun startUsageBatchLoop(context: Context) {
@@ -1177,15 +1222,41 @@ class LauncherViewModel : ViewModel() {
 
         return when (normalizedType) {
             "refresh_config", "sync_config" -> {
-                val result = loadConfig(context, source = "command:$normalizedType")
-                if (result.success) {
-                    CommandExecResult(success = true, output = "Config refreshed and policy reported")
-                } else {
-                    CommandExecResult(
-                        success = false,
-                        error = result.error ?: "Refresh config failed",
-                        errorCode = result.errorCode ?: "REFRESH_CONFIG_FAILED"
+                if (_state.value.lockState == DeviceLockState.LOCKED) {
+                    Log.i(
+                        tag,
+                        "command $normalizedType deferred commandId=$commandId leaseToken=$leaseToken reason=device_locked_local_state"
                     )
+                    return CommandExecResult(
+                        success = true,
+                        output = "Deferred until device unlock"
+                    )
+                }
+
+                val result = loadConfig(context, source = "command:$normalizedType")
+                when {
+                    result.success -> {
+                        CommandExecResult(success = true, output = "Config refreshed and policy reported")
+                    }
+
+                    shouldDeferConfigCommandWhileLocked(result) -> {
+                        Log.i(
+                            tag,
+                            "command $normalizedType deferred commandId=$commandId leaseToken=$leaseToken reason=device_locked_backend_gate errorCode=${result.errorCode}"
+                        )
+                        CommandExecResult(
+                            success = true,
+                            output = "Deferred until device unlock"
+                        )
+                    }
+
+                    else -> {
+                        CommandExecResult(
+                            success = false,
+                            error = result.error ?: "Refresh config failed",
+                            errorCode = result.errorCode ?: "REFRESH_CONFIG_FAILED"
+                        )
+                    }
                 }
             }
 
@@ -1226,6 +1297,14 @@ class LauncherViewModel : ViewModel() {
 
             else -> CommandExecResult(success = false, error = "Unsupported command type: $type", errorCode = "UNSUPPORTED_COMMAND")
         }
+    }
+
+    private fun shouldDeferConfigCommandWhileLocked(result: ConfigLoadResult): Boolean {
+        if (_state.value.lockState != DeviceLockState.LOCKED) return false
+        if (result.errorCode == "HTTP_423") return true
+
+        val errorText = result.error?.lowercase().orEmpty()
+        return errorText.contains("device is locked") || errorText.contains("locked")
     }
 
     private fun isDeviceOwnerNow(context: Context): Boolean {
