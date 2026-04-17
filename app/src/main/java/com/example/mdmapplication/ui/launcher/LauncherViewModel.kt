@@ -520,7 +520,13 @@ class LauncherViewModel : ViewModel() {
                 blockUninstall = config.blockUninstall,
                 disableWifi = config.disableWifi,
                 disableBluetooth = config.disableBluetooth,
-                disableCamera = config.disableCamera
+                disableCamera = config.disableCamera,
+                lockPrivateDnsConfig = config.lockPrivateDnsConfig,
+                lockVpnConfig = config.lockVpnConfig,
+                blockDebuggingFeatures = config.blockDebuggingFeatures,
+                disableUsbDataSignaling = config.disableUsbDataSignaling,
+                disallowSafeBoot = config.disallowSafeBoot,
+                disallowFactoryReset = config.disallowFactoryReset
             )
             Log.i(tag, "enforceAllowedPackages enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
             policy.enforceAllowedPackages(
@@ -1122,7 +1128,13 @@ class LauncherViewModel : ViewModel() {
                 "\"disableCamera\":${config.disableCamera}," +
                 "\"disableStatusBar\":${config.disableStatusBar}," +
                 "\"kioskMode\":${config.kioskMode}," +
-                "\"blockUninstall\":${config.blockUninstall}" +
+                "\"blockUninstall\":${config.blockUninstall}," +
+                "\"lockPrivateDnsConfig\":${config.lockPrivateDnsConfig}," +
+                "\"lockVpnConfig\":${config.lockVpnConfig}," +
+                "\"blockDebuggingFeatures\":${config.blockDebuggingFeatures}," +
+                "\"disableUsbDataSignaling\":${config.disableUsbDataSignaling}," +
+                "\"disallowSafeBoot\":${config.disallowSafeBoot}," +
+                "\"disallowFactoryReset\":${config.disallowFactoryReset}" +
                 "}"
     }
 

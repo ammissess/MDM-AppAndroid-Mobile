@@ -16,6 +16,12 @@ import com.example.mdmapplication.ui.launcher.LauncherActivity
 
 class DevicePolicyHelper(private val context: Context) {
 
+    private data class UsbDataSignalingOutcome(
+        val applied: Boolean,
+        val enabled: Boolean? = null,
+        val reason: String
+    )
+
     private val dpm =
         context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
 
@@ -234,7 +240,13 @@ class DevicePolicyHelper(private val context: Context) {
         blockUninstall: Boolean,
         disableWifi: Boolean,
         disableBluetooth: Boolean,
-        disableCamera: Boolean
+        disableCamera: Boolean,
+        lockPrivateDnsConfig: Boolean,
+        lockVpnConfig: Boolean,
+        blockDebuggingFeatures: Boolean,
+        disableUsbDataSignaling: Boolean,
+        disallowSafeBoot: Boolean,
+        disallowFactoryReset: Boolean
     ) {
         val isOwner = isDeviceOwner()
         Log.i(
@@ -260,10 +272,57 @@ class DevicePolicyHelper(private val context: Context) {
         runPolicyOrThrow("setCameraDisabled[$disableCamera]") {
             dpm.setCameraDisabled(admin, disableCamera)
         }
+        setUserRestrictionStrict(UserManager.DISALLOW_CONFIG_PRIVATE_DNS, lockPrivateDnsConfig)
+        setUserRestrictionStrict(UserManager.DISALLOW_CONFIG_VPN, lockVpnConfig)
+        setUserRestrictionStrict(UserManager.DISALLOW_DEBUGGING_FEATURES, blockDebuggingFeatures)
+        val usbOutcome = applyUsbDataSignalingStrict(disableUsbDataSignaling)
+        setUserRestrictionStrict(UserManager.DISALLOW_SAFE_BOOT, disallowSafeBoot)
+        setUserRestrictionStrict(UserManager.DISALLOW_FACTORY_RESET, disallowFactoryReset)
 
-        setUserRestrictionStrict(UserManager.DISALLOW_DEBUGGING_FEATURES, false)
-        setUserRestrictionStrict(UserManager.DISALLOW_SAFE_BOOT, false)
+        Log.i(
+            tag,
+            "applyHardening network lockPrivateDnsConfig=$lockPrivateDnsConfig lockVpnConfig=$lockVpnConfig"
+        )
+        Log.i(
+            tag,
+            "applyHardening security blockDebuggingFeatures=$blockDebuggingFeatures disallowSafeBoot=$disallowSafeBoot disallowFactoryReset=$disallowFactoryReset"
+        )
+        Log.i(
+            tag,
+            "applyHardening usb disableUsbDataSignaling=$disableUsbDataSignaling applied=${usbOutcome.applied} enabled=${usbOutcome.enabled} reason=${usbOutcome.reason}"
+        )
         Log.i(tag, "applyFromServerConfig done")
+    }
+
+    private fun applyUsbDataSignalingStrict(disabled: Boolean): UsbDataSignalingOutcome {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return UsbDataSignalingOutcome(
+                applied = false,
+                reason = "unsupported_sdk_${Build.VERSION.SDK_INT}"
+            )
+        }
+
+        val supported = runCatching { dpm.canUsbDataSignalingBeDisabled() }
+            .getOrElse { err ->
+                throw IllegalStateException("canUsbDataSignalingBeDisabled failed: ${err.message}", err)
+            }
+
+        if (!supported) {
+            return UsbDataSignalingOutcome(
+                applied = false,
+                reason = "unsupported_capability"
+            )
+        }
+
+        val enabled = !disabled
+        runPolicyOrThrow("setUsbDataSignalingEnabled[$enabled]") {
+            dpm.setUsbDataSignalingEnabled(enabled)
+        }
+        return UsbDataSignalingOutcome(
+            applied = true,
+            enabled = enabled,
+            reason = if (disabled) "disabled" else "enabled"
+        )
     }
 
     private fun applyLockTaskFeatures(kioskMode: Boolean, lockedMode: Boolean) {
