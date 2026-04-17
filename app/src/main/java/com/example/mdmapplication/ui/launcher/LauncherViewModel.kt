@@ -27,6 +27,7 @@ import com.example.mdmapplication.data.remote.DeviceAppInventoryItem
 import com.example.mdmapplication.data.remote.DeviceAppInventoryReportRequest
 import com.example.mdmapplication.data.remote.DeviceConfigResponse
 import com.example.mdmapplication.data.remote.DeviceEventRequest
+import com.example.mdmapplication.data.remote.DeviceLeasedCommand
 import com.example.mdmapplication.data.remote.DevicePolicyStateReportRequest
 import com.example.mdmapplication.data.remote.DevicePollCommandsRequest
 import com.example.mdmapplication.data.remote.DeviceRegisterRequest
@@ -93,6 +94,7 @@ class LauncherViewModel : ViewModel() {
     private var commandPollJob: Job? = null
     private var stateSnapshotJob: Job? = null
     private val configLoadMutex = Mutex()
+    private val commandPollMutex = Mutex()
     private val runtimeWakeMutex = Mutex()
     private var refreshAttemptSeq: Long = 0
     private var lastRuntimeWakeAtMs: Long = 0L
@@ -209,6 +211,12 @@ class LauncherViewModel : ViewModel() {
                         )
                     }
                 }
+
+                maybeFastPollAfterRuntimeWake(
+                    context = context,
+                    deviceCode = deviceCode,
+                    triggerReason = triggerReason,
+                )
             } catch (e: MdmApi.ApiException) {
                 Log.e(
                     tag,
@@ -655,90 +663,11 @@ class LauncherViewModel : ViewModel() {
                     try {
                         pollAttempt += 1
                         Log.i(tag, "poll attempt=$pollAttempt deviceCode=$deviceCode")
-                        val token = getOrRefreshToken(deviceCode)
-                        runCatching { reportStateSnapshotNow(context, deviceCode, token) }
-                        val pollResp = api.pollCommands(
-                            token = token,
-                            req = DevicePollCommandsRequest(deviceCode = deviceCode, limit = 5)
+                        pollCommandsNow(
+                            context = context,
+                            deviceCode = deviceCode,
+                            pollLabel = "attempt=$pollAttempt",
                         )
-                        Log.i(tag, "poll success attempt=$pollAttempt commandCount=${pollResp.commands.size}")
-
-                        for (cmd in pollResp.commands) {
-                            Log.i(
-                                tag,
-                                "command polled commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
-                            )
-                            Log.i(
-                                tag,
-                                "command trace begin commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken} deviceCode=$deviceCode"
-                            )
-
-                            val result = if (cmd.type.trim().lowercase() == "lock_screen") {
-                                val policy = DevicePolicyHelper(context)
-                                val isOwnerNow = isDeviceOwnerNow(context)
-                                val isOwnerFromHelper = policy.isDeviceOwner()
-                                Log.i(
-                                    tag,
-                                    "command trace lock_screen ownerCheck commandId=${cmd.id} dpm=$isOwnerNow helper=$isOwnerFromHelper"
-                                )
-                                if (!isOwnerNow || !isOwnerFromHelper) {
-                                    CommandExecResult(
-                                        success = false,
-                                        error = "Device is not owner, cannot enforce lock containment",
-                                        errorCode = "POLICY_NOT_DEVICE_OWNER"
-                                    )
-                                } else {
-                                    Log.i(
-                                        tag,
-                                        "command trace before execute commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
-                                    )
-                                    executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
-                                }
-                            } else {
-                                Log.i(
-                                    tag,
-                                    "command trace before execute commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
-                                )
-                                executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
-                            }
-
-                            Log.i(
-                                tag,
-                                "command trace result commandId=${cmd.id} type=${cmd.type} success=${result.success} errorCode=${result.errorCode} error=${result.error} output=${result.output}"
-                            )
-
-                            val ackResult = if (result.success) "SUCCESS" else "FAILED"
-                            runCatching {
-                                val ackToken = getOrRefreshToken(deviceCode)
-                                Log.i(
-                                    tag,
-                                    "ack payload commandId=${cmd.id} leaseToken=${cmd.leaseToken} result=$ackResult errorCode=${result.errorCode} error=${result.error} output=${result.output}"
-                                )
-                                api.ackCommand(
-                                    token = ackToken,
-                                    req = DeviceAckCommandRequest(
-                                        deviceCode = deviceCode,
-                                        commandId = cmd.id,
-                                        leaseToken = cmd.leaseToken,
-                                        result = ackResult,
-                                        error = result.error,
-                                        errorCode = result.errorCode,
-                                        output = result.output
-                                    )
-                                )
-                            }.onSuccess {
-                                Log.i(
-                                    tag,
-                                    "ack result commandId=${cmd.id} type=${cmd.type} result=${if (result.success) "SUCCESS" else "FAILED"}"
-                                )
-                            }.onFailure { ackErr ->
-                                Log.e(
-                                    tag,
-                                    "ack failure commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}",
-                                    ackErr
-                                )
-                            }
-                        }
                     } catch (e: MdmApi.ApiException) {
                         Log.e(
                             tag,
@@ -766,6 +695,136 @@ class LauncherViewModel : ViewModel() {
             }
         }
         Log.i(tag, "commandPollJob started active=${commandPollJob?.isActive == true}")
+    }
+
+    private suspend fun maybeFastPollAfterRuntimeWake(
+        context: Context,
+        deviceCode: String,
+        triggerReason: String,
+    ) {
+        if (!shouldFastPollAfterRuntimeWake(triggerReason)) return
+
+        try {
+            Log.i(tag, "fast poll trigger reason=$triggerReason deviceCode=$deviceCode")
+            pollCommandsNow(
+                context = context,
+                deviceCode = deviceCode,
+                pollLabel = "trigger=$triggerReason",
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Log.w(tag, "fast poll failed reason=$triggerReason deviceCode=$deviceCode", t)
+        }
+    }
+
+    private fun shouldFastPollAfterRuntimeWake(triggerReason: String): Boolean {
+        return triggerReason.startsWith("fcm:") || triggerReason == "network:return"
+    }
+
+    private suspend fun pollCommandsNow(
+        context: Context,
+        deviceCode: String,
+        pollLabel: String,
+    ) {
+        commandPollMutex.withLock {
+            val token = getOrRefreshToken(deviceCode)
+            runCatching { reportStateSnapshotNow(context, deviceCode, token) }
+            val pollResp = api.pollCommands(
+                token = token,
+                req = DevicePollCommandsRequest(deviceCode = deviceCode, limit = 5)
+            )
+            Log.i(tag, "poll success $pollLabel deviceCode=$deviceCode commandCount=${pollResp.commands.size}")
+
+            for (cmd in pollResp.commands) {
+                processPolledCommand(
+                    context = context,
+                    deviceCode = deviceCode,
+                    cmd = cmd,
+                )
+            }
+        }
+    }
+
+    private suspend fun processPolledCommand(
+        context: Context,
+        deviceCode: String,
+        cmd: DeviceLeasedCommand,
+    ) {
+        Log.i(
+            tag,
+            "command polled commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
+        )
+        Log.i(
+            tag,
+            "command trace begin commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken} deviceCode=$deviceCode"
+        )
+
+        val result = if (cmd.type.trim().lowercase() == "lock_screen") {
+            val policy = DevicePolicyHelper(context)
+            val isOwnerNow = isDeviceOwnerNow(context)
+            val isOwnerFromHelper = policy.isDeviceOwner()
+            Log.i(
+                tag,
+                "command trace lock_screen ownerCheck commandId=${cmd.id} dpm=$isOwnerNow helper=$isOwnerFromHelper"
+            )
+            if (!isOwnerNow || !isOwnerFromHelper) {
+                CommandExecResult(
+                    success = false,
+                    error = "Device is not owner, cannot enforce lock containment",
+                    errorCode = "POLICY_NOT_DEVICE_OWNER"
+                )
+            } else {
+                Log.i(
+                    tag,
+                    "command trace before execute commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
+                )
+                executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
+            }
+        } else {
+            Log.i(
+                tag,
+                "command trace before execute commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
+            )
+            executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
+        }
+
+        Log.i(
+            tag,
+            "command trace result commandId=${cmd.id} type=${cmd.type} success=${result.success} errorCode=${result.errorCode} error=${result.error} output=${result.output}"
+        )
+
+        val ackResult = if (result.success) "SUCCESS" else "FAILED"
+        runCatching {
+            val ackToken = getOrRefreshToken(deviceCode)
+            Log.i(
+                tag,
+                "ack payload commandId=${cmd.id} leaseToken=${cmd.leaseToken} result=$ackResult errorCode=${result.errorCode} error=${result.error} output=${result.output}"
+            )
+            api.ackCommand(
+                token = ackToken,
+                req = DeviceAckCommandRequest(
+                    deviceCode = deviceCode,
+                    commandId = cmd.id,
+                    leaseToken = cmd.leaseToken,
+                    result = ackResult,
+                    error = result.error,
+                    errorCode = result.errorCode,
+                    output = result.output
+                )
+            )
+        }.onSuccess {
+            Log.i(
+                tag,
+                "ack result commandId=${cmd.id} type=${cmd.type} result=${if (result.success) "SUCCESS" else "FAILED"}"
+            )
+        }.onFailure { ackErr ->
+            Log.e(
+                tag,
+                "ack failure commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}",
+                ackErr
+            )
+        }
     }
 
     private fun startStateSnapshotLoop(context: Context) {

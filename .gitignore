@@ -14,3 +14,10 @@
 .cxx
 local.properties
 app/google-services.json
+.android-home/
+.gradle-home/
+emulator-ticket7.out.log
+emulator-ticket7.err.log
+emulator-ticket9.out.log
+emulator-ticket9.err.log
+ticket9-android-harness.log
