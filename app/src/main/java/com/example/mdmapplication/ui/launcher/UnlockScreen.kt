@@ -1,5 +1,6 @@
 package com.example.mdmapplication.ui.launcher
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -11,20 +12,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,10 +49,53 @@ private val UnlockError = Color(0xFFFF9AA6)
 @Composable
 fun UnlockScreen(
     error: String?,
+    lockReason: String?,
+    noProfileLocked: Boolean,
+    lockedState: DeviceLockState,
+    lockContainmentStatus: String?,
+    lockContainmentErrorCode: String?,
     loading: Boolean,
+    unlockSubmitting: Boolean,
     onUnlock: (String) -> Unit
 ) {
     var password by remember { mutableStateOf("") }
+    var previousUnlockSubmitting by remember { mutableStateOf(unlockSubmitting) }
+    var previousNoProfileLocked by remember { mutableStateOf(noProfileLocked) }
+    var previousLockReason by remember { mutableStateOf(lockReason) }
+    var previousLockState by remember { mutableStateOf(lockedState) }
+    var previousError by remember { mutableStateOf(error) }
+
+    fun clearPassword(reason: String) {
+        if (password.isEmpty()) return
+        password = ""
+        Log.i("MDM_UNLOCK_UI", "password cleared reason=$reason")
+    }
+
+    LaunchedEffect(unlockSubmitting, error, noProfileLocked, lockReason, lockedState) {
+        if (previousError != error && !error.isNullOrBlank()) {
+            clearPassword("unlock_error_changed")
+        }
+        if (!previousNoProfileLocked && noProfileLocked) {
+            clearPassword("no_profile_locked")
+        }
+        if (previousLockReason != lockReason) {
+            clearPassword("lock_reason_changed")
+        }
+        if (previousUnlockSubmitting && !unlockSubmitting) {
+            clearPassword("submit_finished")
+        }
+        if (previousLockState == DeviceLockState.LOCKED && lockedState != DeviceLockState.LOCKED) {
+            clearPassword("unlock_success_or_exit")
+        }
+
+        previousUnlockSubmitting = unlockSubmitting
+        previousNoProfileLocked = noProfileLocked
+        previousLockReason = lockReason
+        previousLockState = lockedState
+        previousError = error
+    }
+
+    val noProfileMessageVisible = noProfileLocked || isNoProfileLockReason(lockReason)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -100,6 +143,44 @@ fun UnlockScreen(
                         textAlign = TextAlign.Center
                     )
 
+                    if (noProfileMessageVisible) {
+                        Text(
+                            text = LauncherViewModel.NO_PROFILE_LOCKED_MESSAGE,
+                            color = UnlockError,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    if (
+                        noProfileLocked &&
+                        !lockReason.isNullOrBlank() &&
+                        lockReason != LauncherViewModel.NO_PROFILE_LOCKED_MESSAGE
+                    ) {
+                        Text(
+                            text = lockReason,
+                            color = UnlockError,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    val containmentText = buildString {
+                        append("Containment: ")
+                        append(lockContainmentStatus ?: "PENDING")
+                        if (!lockContainmentErrorCode.isNullOrBlank()) {
+                            append(" (")
+                            append(lockContainmentErrorCode)
+                            append(")")
+                        }
+                    }
+                    Text(
+                        text = containmentText,
+                        color = UnlockMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center
+                    )
+
                     Spacer(modifier = Modifier.height(4.dp))
 
                     OutlinedTextField(
@@ -138,26 +219,33 @@ fun UnlockScreen(
                     }
 
                     Button(
-                        onClick = { onUnlock(password) },
-                        enabled = password.isNotBlank() && !loading,
+                        onClick = {
+                            Log.i(
+                                "MDM_UNLOCK_UI",
+                                "button clicked passwordLength=${password.length} lockedState=${lockedState.name} noProfileLocked=$noProfileLocked loading=$loading unlockSubmitting=$unlockSubmitting"
+                            )
+                            onUnlock(password)
+                        },
+                        enabled = password.isNotBlank() && !unlockSubmitting,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF7CCBFF),
                             contentColor = Color(0xFF07111E)
                         )
                     ) {
-                        if (loading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = Color(0xFF07111E)
-                            )
-                        } else {
-                            Text("Mở khóa thiết bị")
-                        }
+                        Text(if (unlockSubmitting) "Đang mở khóa..." else "Mở khóa thiết bị")
                     }
                 }
             }
         }
     }
+}
+
+private fun isNoProfileLockReason(lockReason: String?): Boolean {
+    val reason = lockReason?.trim()?.lowercase() ?: return false
+    if (reason == LauncherViewModel.NO_PROFILE_LOCKED_MESSAGE.lowercase()) return true
+    return reason.contains("profile not linked") ||
+        reason.contains("profile_not_linked") ||
+        reason.contains("device_profile_not_linked") ||
+        reason.contains("chua duoc gan profile")
 }

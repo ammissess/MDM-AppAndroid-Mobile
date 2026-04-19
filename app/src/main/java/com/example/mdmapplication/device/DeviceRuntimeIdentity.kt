@@ -12,6 +12,15 @@ object DeviceRuntimeIdentity {
     const val DEVICE_USER = "device"
     const val DEVICE_PASS = "device123"
 
+    /**
+     * Debug override for matching a backend-provisioned deviceCode.
+     *
+     * Usage (emulator):
+     *   adb shell setprop debug.mdm.deviceCode <deviceCode>
+     *   (then force-stop + relaunch app)
+     */
+    private const val DEVICE_CODE_OVERRIDE_PROP = "debug.mdm.deviceCode"
+
     private const val PREFS_NAME = "mdm_runtime_prefs"
     private const val KEY_PENDING_FCM_TOKEN = "pending_fcm_token"
     private const val KEY_PENDING_FCM_TOKEN_UPDATED_AT = "pending_fcm_token_updated_at"
@@ -23,6 +32,19 @@ object DeviceRuntimeIdentity {
     )
 
     fun getDeviceCode(context: Context): String {
+        val override = runCatching {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val getMethod = clazz.getMethod("get", String::class.java)
+            getMethod.invoke(null, DEVICE_CODE_OVERRIDE_PROP) as? String
+        }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        if (override != null) {
+            Log.i(TAG, "getDeviceCode override selected=$override")
+            return override
+        }
+
         val fromDefault = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         val fromDeviceProtected = runCatching {
             Settings.Secure.getString(

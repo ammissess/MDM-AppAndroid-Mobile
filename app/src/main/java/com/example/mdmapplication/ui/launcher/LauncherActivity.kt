@@ -1,21 +1,36 @@
 package com.example.mdmapplication.ui.launcher
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.admin.DevicePolicyManager
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.mdmapplication.BuildConfig
+import com.example.mdmapplication.R
 import com.example.mdmapplication.device.DevicePolicyHelper
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -24,11 +39,33 @@ class LauncherActivity : ComponentActivity() {
 
     private val viewModel: LauncherViewModel by viewModels()
     private val tag = "LauncherActivity"
+    private val lockContainmentTag = "MDM_LOCK_CONTAINMENT"
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastKnownLockState: DeviceLockState = DeviceLockState.UNKNOWN
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var recoveryGeneration = 0
+    private var lastBringToFrontAtMs = 0L
+    private var lockContainmentInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(tag, "onCreate savedInstanceState=${savedInstanceState != null} taskId=$taskId")
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+                    Log.i(lockContainmentTag, "enforce reason=back_dispatcher_blocked")
+                    enforceLockedContainment("back_dispatcher")
+                    return
+                }
+                isEnabled = false
+                try {
+                    onBackPressedDispatcher.onBackPressed()
+                } finally {
+                    isEnabled = true
+                }
+            }
+        })
 
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val policy = DevicePolicyHelper(this)
@@ -45,16 +82,11 @@ class LauncherActivity : ComponentActivity() {
             viewModel.commandActions.collectLatest { action ->
                 when (action) {
                     LauncherCommandAction.TryLockScreen -> {
-                        if (isDo) runCatching { startLockTask() }
+                        enforceLockedContainment("command:try_lock")
                     }
 
                     LauncherCommandAction.BringMdmToFrontAndLock -> {
-                        bringSelfToFrontOnce()
-                        if (isDo) {
-                            runCatching { policy.applyLockedContainment(packageName) }
-                                .onFailure { Log.e(tag, "applyLockedContainment failed", it) }
-                            policy.startLockTaskIfPermitted(this@LauncherActivity)
-                        }
+                        enforceLockedContainment("command:bring_front_and_lock")
                     }
 
                     LauncherCommandAction.AllowedAppsUpdated -> {
@@ -76,12 +108,44 @@ class LauncherActivity : ComponentActivity() {
         setContent {
             val st by viewModel.state.collectAsState()
 
+            LaunchedEffect(st.unlockError) {
+                val err = st.unlockError
+                if (st.lockState == DeviceLockState.LOCKED && !err.isNullOrBlank()) {
+                    Toast.makeText(this@LauncherActivity, err, Toast.LENGTH_SHORT).show()
+                    maybeNotifyUnlockFailure(err)
+                }
+            }
+
+            LaunchedEffect(st.lockState) {
+                if (lastKnownLockState == DeviceLockState.LOCKED && st.lockState == DeviceLockState.ACTIVE) {
+                    runCatching { stopLockTask() }
+                        .onFailure { Log.w(tag, "stopLockTask on unlock transition failed", it) }
+                }
+                if (st.lockState == DeviceLockState.LOCKED) {
+                    enforceLockedContainment("state:locked")
+                }
+                lastKnownLockState = st.lockState
+            }
+
             when (st.lockState) {
                 DeviceLockState.LOCKED -> {
+                    BackHandler(enabled = true) { }
                     UnlockScreen(
-                        error = st.unlockError,
-                        loading = st.loading,
-                        onUnlock = { password -> viewModel.unlock(this@LauncherActivity, password) }
+                        st.unlockError,
+                        st.lockReason,
+                        st.noProfileLocked,
+                        st.lockState,
+                        st.lockContainmentStatus,
+                        st.lockContainmentErrorCode,
+                        st.loading,
+                        st.unlockSubmitting,
+                        { password ->
+                            Log.i(
+                                "MDM_UNLOCK_UI",
+                                "activity onUnlock received passwordLength=${password.length} lockedState=${st.lockState.name} noProfileLocked=${st.noProfileLocked}"
+                            )
+                            viewModel.unlock(this@LauncherActivity, password)
+                        }
                     )
                 }
 
@@ -120,30 +184,81 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        recoveryGeneration += 1
         Log.i(tag, "onResume taskId=$taskId")
-        triggerRuntimeWake("ui:onResume")
+        enforceLockedContainment("lifecycle:onResume")
+        if (viewModel.state.value.lockState != DeviceLockState.LOCKED) {
+            triggerRuntimeWake("ui:onResume")
+        } else {
+            Log.i(lockContainmentTag, "skip runtime wake reason=ui:onResume state=LOCKED")
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            enforceLockedContainment("lifecycle:onWindowFocusChanged")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         Log.i(tag, "onNewIntent action=${intent.action} taskId=$taskId")
-        val wakeReason = parseWakeReason(intent) ?: "ui:onNewIntent"
-        triggerRuntimeWake(wakeReason)
+        if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+            enforceLockedContainment("lifecycle:onNewIntent")
+        } else {
+            val wakeReason = parseWakeReason(intent) ?: "ui:onNewIntent"
+            triggerRuntimeWake(wakeReason)
+        }
+    }
+
+    override fun onPause() {
+        if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+            scheduleDelayedForegroundRecovery("lifecycle:onPause")
+        }
+        super.onPause()
     }
 
     override fun onStop() {
+        if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+            scheduleDelayedForegroundRecovery("lifecycle:onStop")
+        }
         unregisterNetworkCallback()
         super.onStop()
     }
 
-    override fun onDestroy() {
-        Log.w(tag, "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations")
-        super.onDestroy()
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+            scheduleDelayedForegroundRecovery("lifecycle:onUserLeaveHint")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+            Log.i(lockContainmentTag, "enforce reason=back_pressed_blocked")
+            enforceLockedContainment("back_pressed")
+            return
+        }
+        super.onBackPressed()
+    }
+
+    override fun finish() {
+        if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+            Log.i(lockContainmentTag, "enforce reason=finish_blocked")
+            enforceLockedContainment("finish_blocked")
+            return
+        }
+        super.finish()
     }
 
 
     private fun bringSelfToFrontOnce() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBringToFrontAtMs < 600L) return
+        lastBringToFrontAtMs = now
         startActivity(
             Intent(this, LauncherActivity::class.java).apply {
                 addFlags(
@@ -158,6 +273,124 @@ class LauncherActivity : ComponentActivity() {
     private fun triggerRuntimeWake(reason: String, force: Boolean = false) {
         Log.i(tag, "runtime retrigger reason=$reason force=$force")
         viewModel.requestRuntimeWake(context = this, reason = reason, force = force)
+    }
+
+    private fun enforceLockedContainment(reason: String) {
+        val st = viewModel.state.value
+        if (st.lockState != DeviceLockState.LOCKED) return
+        if (lockContainmentInFlight) return
+        val resumedAndFocused =
+            lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && hasWindowFocus()
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        val systemLocked = runCatching {
+            activityManager?.lockTaskModeState == android.app.ActivityManager.LOCK_TASK_MODE_LOCKED
+        }.getOrDefault(false)
+        Log.i(
+            lockContainmentTag,
+            "activityState reason=$reason resumed=${lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)} hasFocus=${hasWindowFocus()}"
+        )
+        Log.i(lockContainmentTag, "enforce reason=$reason")
+
+        // Avoid re-launch churn when already foregrounded; this can create onPause/onResume loops.
+        if (!resumedAndFocused) {
+            bringSelfToFrontOnce()
+            return
+        }
+
+        if (systemLocked) {
+            Log.i(lockContainmentTag, "skip reason=alreadyForegroundLocked")
+            return
+        }
+
+        logTopActivityState("before:$reason")
+
+        val policy = DevicePolicyHelper(this)
+        lockContainmentInFlight = true
+        val outcome = try {
+            runCatching {
+                policy.ensureStrictLockedContainment(activity = this)
+            }.getOrElse { err ->
+                Log.e(tag, "enforceLockedContainment failed reason=$reason", err)
+                DevicePolicyHelper.LockContainmentOutcome(
+                    status = "FAILED",
+                    error = err.message ?: "Lock containment failed",
+                    errorCode = "LOCK_TASK_NOT_ALLOWED"
+                )
+            }
+        } finally {
+            lockContainmentInFlight = false
+        }
+
+        viewModel.updateLockContainment(outcome.status, outcome.errorCode)
+        Log.i(tag, "locked containment reason=$reason status=${outcome.status} errorCode=${outcome.errorCode}")
+        logTopActivityState("after:$reason")
+    }
+
+    private fun scheduleDelayedForegroundRecovery(reason: String) {
+        recoveryGeneration += 1
+        val scheduledGeneration = recoveryGeneration
+        val delaysMs = longArrayOf(300L, 800L)
+        delaysMs.forEachIndexed { index, delayMs ->
+            val attempt = index + 1
+            mainHandler.postDelayed({
+                if (scheduledGeneration != recoveryGeneration) return@postDelayed
+                if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
+                    if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && hasWindowFocus()) {
+                        return@postDelayed
+                    }
+                    Log.i(lockContainmentTag, "recovery reason=$reason attempt=$attempt")
+                    bringSelfToFrontOnce()
+                    enforceLockedContainment("$reason:recovery:$attempt")
+                }
+            }, delayMs)
+        }
+    }
+
+    private fun logTopActivityState(stage: String) {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager ?: return
+        val top = runCatching {
+            am.appTasks.firstOrNull()?.taskInfo?.topActivity?.flattenToShortString()
+        }.getOrNull()
+        Log.i(lockContainmentTag, "topCheck stage=$stage top=$top")
+    }
+
+    override fun onDestroy() {
+        recoveryGeneration += 1
+        mainHandler.removeCallbacksAndMessages(null)
+        Log.w(tag, "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations")
+        super.onDestroy()
+    }
+
+    private fun maybeNotifyUnlockFailure(message: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channel = NotificationChannel(
+                UNLOCK_ERROR_CHANNEL_ID,
+                "Unlock Errors",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            nm.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, UNLOCK_ERROR_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Unlock failed")
+            .setContentText(message)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+
+        runCatching {
+            NotificationManagerCompat.from(this).notify(UNLOCK_ERROR_NOTIFICATION_ID, notification)
+        }.onFailure { Log.w(tag, "unlock error notification failed", it) }
     }
 
     private fun parseWakeReason(intent: Intent?): String? {
@@ -200,6 +433,8 @@ class LauncherActivity : ComponentActivity() {
     companion object {
         const val ACTION_RUNTIME_WAKE = "com.example.mdmapplication.action.RUNTIME_WAKE"
         const val EXTRA_WAKE_REASON = "extra_wake_reason"
+        private const val UNLOCK_ERROR_CHANNEL_ID = "unlock_error_channel"
+        private const val UNLOCK_ERROR_NOTIFICATION_ID = 4001
 
         fun createRuntimeWakeIntent(context: Context, reason: String): Intent =
             Intent(context, LauncherActivity::class.java).apply {

@@ -1,6 +1,7 @@
 package com.example.mdmapplication.device
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -12,9 +13,23 @@ import android.os.Build
 import android.os.UserManager
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import com.example.mdmapplication.ui.launcher.LauncherActivity
 
 class DevicePolicyHelper(private val context: Context) {
+
+    data class PolicyApplyOutcome(
+        val status: String,
+        val error: String? = null,
+        val errorCode: String? = null
+    )
+
+    data class LockContainmentOutcome(
+        val status: String,
+        val error: String? = null,
+        val errorCode: String? = null
+    )
 
     private data class UsbDataSignalingOutcome(
         val applied: Boolean,
@@ -32,6 +47,7 @@ class DevicePolicyHelper(private val context: Context) {
     private val KEY_LAST_MANAGED = "last_managed_packages"
 
     private val tag = "DevicePolicyHelper"
+    private val lockContainmentTag = "MDM_LOCK_CONTAINMENT"
     private val selfPackage: String = context.packageName
 
     private fun isSelfPackage(packageName: String): Boolean = packageName == selfPackage
@@ -247,13 +263,19 @@ class DevicePolicyHelper(private val context: Context) {
         disableUsbDataSignaling: Boolean,
         disallowSafeBoot: Boolean,
         disallowFactoryReset: Boolean
-    ) {
+    ): PolicyApplyOutcome {
         val isOwner = isDeviceOwner()
         Log.i(
             tag,
             "applyFromServerConfig enter launcherPackage=$launcherPackage allowedApps=${allowedApps.size} kioskMode=$kioskMode isDeviceOwner=$isOwner"
         )
-        if (!isOwner) return
+        if (!isOwner) {
+            return PolicyApplyOutcome(
+                status = "FAILED",
+                error = "Device is not owner, policy cannot be applied",
+                errorCode = "POLICY_NOT_DEVICE_OWNER"
+            )
+        }
         restoreSelfBeforePolicyStrict()
         setPersistentHomeToLauncherStrict()
         setLockTaskPackagesStrict((listOf(launcherPackage, selfPackage) + allowedApps).distinct().toTypedArray())
@@ -291,7 +313,20 @@ class DevicePolicyHelper(private val context: Context) {
             tag,
             "applyHardening usb disableUsbDataSignaling=$disableUsbDataSignaling applied=${usbOutcome.applied} enabled=${usbOutcome.enabled} reason=${usbOutcome.reason}"
         )
-        Log.i(tag, "applyFromServerConfig done")
+        val unsupported = disableUsbDataSignaling && !usbOutcome.applied &&
+                (usbOutcome.reason.startsWith("unsupported_"))
+
+        val outcome = if (unsupported) {
+            PolicyApplyOutcome(
+                status = "PARTIAL",
+                error = "Policy partially applied: ${usbOutcome.reason}",
+                errorCode = "UNSUPPORTED_API"
+            )
+        } else {
+            PolicyApplyOutcome(status = "SUCCESS")
+        }
+        Log.i(tag, "applyFromServerConfig done status=${outcome.status} errorCode=${outcome.errorCode}")
+        return outcome
     }
 
     private fun applyUsbDataSignalingStrict(disabled: Boolean): UsbDataSignalingOutcome {
@@ -517,28 +552,164 @@ class DevicePolicyHelper(private val context: Context) {
             throw IllegalStateException("Device is not owner, cannot enforce lock containment")
         }
 
-        val pm = context.packageManager
-        val imePkgs = enabledImePackages()
-        val keep = mutableSetOf<String>().apply {
-            add(selfPackage)
-            add(launcherPackage)
-            addAll(minimumSystemSafelist(pm))
-            addAll(imePkgs)
-        }.filterTo(mutableSetOf()) { pkg -> packageExists(pm, pkg) }
-
         restoreSelfBeforePolicyStrict()
-        restorePackagesStrict(keep)
 
         // Locked containment is limited to lock-task + persistent home to avoid launcher self-break.
         setPersistentHomeToLauncherStrict()
-        setLockTaskPackagesStrict(keep.toTypedArray())
-        applyLockTaskFeaturesStrict(kioskMode = true, lockedMode = true)
+        setLockTaskPackagesStrict(arrayOf(launcherPackage))
+        applyLockTaskFeaturesStrict(kioskMode = true, lockedMode = false)
         writeLastManagedPackages(emptySet())
 
         Log.i(
             tag,
-            "applyLockedContainment done | self=$selfPackage keep=${keep.size} ime=${imePkgs.size}"
+            "applyLockedContainment done | self=$selfPackage launcherPackage=$launcherPackage"
         )
+    }
+
+    fun isDefaultLauncherApp(): Boolean {
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val homePackage = runCatching {
+            context.packageManager
+                .resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo
+                ?.packageName
+        }.getOrNull()
+        return homePackage == selfPackage
+    }
+
+    fun enforceLockedContainment(
+        activity: Activity,
+        launcherPackage: String,
+        disableStatusBar: Boolean
+    ): LockContainmentOutcome {
+        runCatching { dpm.setStatusBarDisabled(admin, disableStatusBar) }
+            .onFailure { Log.w(tag, "setStatusBarDisabled failed in lock containment", it) }
+        return ensureStrictLockedContainment(activity)
+    }
+
+    fun ensureStrictLockedContainment(activity: Activity): LockContainmentOutcome {
+        val adminComponent = ComponentName(context, MyDeviceAdminReceiver::class.java)
+        val ownerCheck = dpm.isDeviceOwnerApp(selfPackage)
+        val isDefaultLauncher = isDefaultLauncherApp()
+        val lifecycleState = (activity as? LifecycleOwner)?.lifecycle?.currentState
+        val isResumed = lifecycleState?.isAtLeast(Lifecycle.State.RESUMED) == true
+        val hasFocus = activity.hasWindowFocus()
+        val isActivityAlive = !activity.isFinishing && !activity.isDestroyed
+        val canStartLockTask = isActivityAlive && isResumed && hasFocus
+        Log.i(
+            lockContainmentTag,
+            "activityState resumed=$isResumed hasFocus=$hasFocus alive=$isActivityAlive ownerCheck=$ownerCheck defaultLauncher=$isDefaultLauncher"
+        )
+        if (!ownerCheck) {
+            val outcome = LockContainmentOutcome(
+                status = "FAILED",
+                error = "Device is not owner, cannot enforce lock containment",
+                errorCode = "NOT_DEVICE_OWNER"
+            )
+            Log.i(
+                lockContainmentTag,
+                "modeStateBefore=-1 modeStateAfterStart=-1 modeStateAfterDelay=-1 outcome=${outcome.status} errorCode=${outcome.errorCode}"
+            )
+            return outcome
+        }
+
+        runCatching {
+            dpm.setLockTaskPackages(adminComponent, arrayOf(selfPackage))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dpm.setLockTaskFeatures(adminComponent, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+            }
+        }.onFailure { err ->
+            val outcome = LockContainmentOutcome(
+                status = "FAILED",
+                error = err.message ?: "Unable to configure lock task allowlist",
+                errorCode = "LOCK_TASK_NOT_ALLOWED"
+            )
+            Log.i(lockContainmentTag, "allowlist failed package=$selfPackage")
+            Log.i(
+                lockContainmentTag,
+                "modeStateBefore=-1 modeStateAfterStart=-1 modeStateAfterDelay=-1 outcome=${outcome.status} errorCode=${outcome.errorCode}"
+            )
+            return outcome
+        }
+        Log.i(lockContainmentTag, "allowlist package=$selfPackage")
+
+        val isPermitted = runCatching { dpm.isLockTaskPermitted(selfPackage) }.getOrDefault(false)
+        if (!isPermitted) {
+            val outcome = LockContainmentOutcome(
+                status = "PARTIAL",
+                error = "Lock task is not permitted for launcher package",
+                errorCode = "LOCK_TASK_NOT_ALLOWED"
+            )
+            Log.i(lockContainmentTag, "start result=not_permitted")
+            Log.i(
+                lockContainmentTag,
+                "modeStateBefore=-1 modeStateAfterStart=-1 modeStateAfterDelay=-1 outcome=${outcome.status} errorCode=${outcome.errorCode}"
+            )
+            return outcome
+        }
+
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val modeStateBefore = runCatching { activityManager.lockTaskModeState }
+            .getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
+
+        val startError = if (canStartLockTask) {
+            runCatching { activity.startLockTask() }.exceptionOrNull()
+        } else {
+            IllegalStateException("Activity not foreground enough for startLockTask")
+        }
+
+        val modeStateAfterStart = runCatching { activityManager.lockTaskModeState }
+            .getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
+        // Avoid blocking UI thread during containment checks.
+        val modeStateAfterDelay = runCatching { activityManager.lockTaskModeState }
+            .getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
+        val expectedLocked = ActivityManager.LOCK_TASK_MODE_LOCKED
+        val isLocked = modeStateAfterDelay == expectedLocked
+
+        if (startError != null && !isLocked) {
+            val outcome = LockContainmentOutcome(
+                status = "FAILED",
+                error = if (!canStartLockTask) {
+                    "Activity not in resumed/focused foreground state"
+                } else {
+                    startError.message ?: "Unable to enter lock task"
+                },
+                errorCode = if (!canStartLockTask) "LOCK_TASK_NOT_ACTIVE" else "LOCK_TASK_NOT_ALLOWED"
+            )
+            Log.i(lockContainmentTag, "start result=failed")
+            Log.i(
+                lockContainmentTag,
+                "modeStateBefore=$modeStateBefore modeStateAfterStart=$modeStateAfterStart modeStateAfterDelay=$modeStateAfterDelay expectedLocked=$expectedLocked isLocked=$isLocked outcome=${outcome.status} errorCode=${outcome.errorCode}"
+            )
+            return outcome
+        }
+        Log.i(lockContainmentTag, "start result=${if (startError == null) "ok" else "already_locked_or_recovered"}")
+
+        val outcome = when {
+            modeStateAfterDelay != expectedLocked -> {
+                LockContainmentOutcome(
+                    status = "FAILED",
+                    error = "Lock task is not active",
+                    errorCode = "LOCK_TASK_NOT_ACTIVE"
+                )
+            }
+
+            !isDefaultLauncher -> {
+                LockContainmentOutcome(
+                    status = "PARTIAL",
+                    error = "Launcher is not default HOME app",
+                    errorCode = "NOT_DEFAULT_LAUNCHER"
+                )
+            }
+
+            else -> LockContainmentOutcome(status = "FULL")
+        }
+
+        Log.i(
+            lockContainmentTag,
+            "modeStateBefore=$modeStateBefore modeStateAfterStart=$modeStateAfterStart modeStateAfterDelay=$modeStateAfterDelay expectedLocked=$expectedLocked isLocked=$isLocked outcome=${outcome.status} errorCode=${outcome.errorCode}"
+        )
+        return outcome
     }
 
     fun startLockTaskIfPermitted(activity: Activity) {

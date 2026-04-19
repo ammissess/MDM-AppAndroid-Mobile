@@ -1,5 +1,6 @@
 package com.example.mdmapplication.ui.launcher
 
+import android.app.Activity
 import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
 import android.Manifest
@@ -62,7 +63,12 @@ data class LauncherUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val lockState: DeviceLockState = DeviceLockState.UNKNOWN,
+    val noProfileLocked: Boolean = false,
+    val lockReason: String? = null,
     val unlockError: String? = null,
+    val unlockSubmitting: Boolean = false,
+    val lockContainmentStatus: String? = null,
+    val lockContainmentErrorCode: String? = null,
     val config: DeviceConfigResponse? = null,
     val apps: List<LauncherApp> = emptyList()
 )
@@ -75,6 +81,18 @@ sealed class LauncherCommandAction {
 
 class LauncherViewModel : ViewModel() {
 
+    companion object {
+        const val NO_PROFILE_LOCKED_MESSAGE = "Thiết bị chưa được gán profile. Vui lòng liên hệ quản trị viên."
+        const val NO_PROFILE_UNLOCK_BLOCKED_MESSAGE = "Thiết bị chưa được gán profile. Không thể mở khóa."
+    }
+
+    fun updateLockContainment(status: String?, errorCode: String?) {
+        _state.value = _state.value.copy(
+            lockContainmentStatus = status,
+            lockContainmentErrorCode = errorCode
+        )
+    }
+
     private val _state = MutableStateFlow(LauncherUiState())
     val state: StateFlow<LauncherUiState> = _state
 
@@ -85,6 +103,12 @@ class LauncherViewModel : ViewModel() {
     private val deviceUser = DeviceRuntimeIdentity.DEVICE_USER
     private val devicePass = DeviceRuntimeIdentity.DEVICE_PASS
     private val tag = "LauncherViewModel"
+    private val pollTag = "MDM_CMD_POLL"
+    private val leaseTag = "MDM_CMD_LEASE"
+    private val handleTag = "MDM_CMD_HANDLE"
+    private val configFetchTag = "MDM_CONFIG_FETCH"
+    private val policyApplyTag = "MDM_POLICY_APPLY"
+    private val policyReportTag = "MDM_POLICY_REPORT"
 
     private var cachedToken: String? = null
     private var cachedTokenDeviceCode: String? = null
@@ -186,13 +210,25 @@ class LauncherViewModel : ViewModel() {
 
                 when (registerResp.status) {
                     "LOCKED" -> {
+                        val mappedNoProfile = isProfileNotLinkedStatusOrMessage(registerResp.status, registerResp.message)
+                        Log.i(
+                            "MDM_PROFILE_STATE",
+                            "profile mapped source=register status=${registerResp.status} linked=${!mappedNoProfile} noProfileMapped=$mappedNoProfile"
+                        )
                         stopTelemetryLoops()
                         _state.value = _state.value.copy(
                             loading = false,
                             lockState = DeviceLockState.LOCKED,
+                            noProfileLocked = mappedNoProfile,
+                            lockReason = if (mappedNoProfile) NO_PROFILE_LOCKED_MESSAGE else null,
+                            lockContainmentStatus = "PENDING",
+                            lockContainmentErrorCode = null,
                             config = null,
-                            apps = emptyList()
+                            apps = emptyList(),
+                            unlockError = if (mappedNoProfile) NO_PROFILE_UNLOCK_BLOCKED_MESSAGE else null,
+                            unlockSubmitting = false
                         )
+                        Log.i(tag, "MDM_UNLOCK state transition LOCKED source=register deviceCode=$deviceCode noProfileLocked=$mappedNoProfile")
                         startCommandPollLoop(context)
                         // Avoid repeated foreground relaunch while already locked.
                         if (!wasLocked) {
@@ -201,8 +237,34 @@ class LauncherViewModel : ViewModel() {
                     }
 
                     "ACTIVE" -> {
+                        Log.i("MDM_PROFILE_STATE", "profile mapped source=register status=ACTIVE linked=true noProfileMapped=false")
                         Log.i(tag, "refresh ACTIVE refreshId=$refreshId -> loadConfig")
                         loadConfig(context, source = "refresh")
+                    }
+
+                    "DEVICE_PROFILE_NOT_LINKED", "PROFILE_NOT_LINKED" -> {
+                        Log.i(
+                            "MDM_PROFILE_STATE",
+                            "profile mapped source=register status=${registerResp.status} linked=false noProfileMapped=true"
+                        )
+                        stopTelemetryLoops()
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            lockState = DeviceLockState.LOCKED,
+                            noProfileLocked = true,
+                            lockReason = NO_PROFILE_LOCKED_MESSAGE,
+                            lockContainmentStatus = "PENDING",
+                            lockContainmentErrorCode = null,
+                            config = null,
+                            apps = emptyList(),
+                            unlockError = NO_PROFILE_UNLOCK_BLOCKED_MESSAGE,
+                            unlockSubmitting = false
+                        )
+                        Log.i(tag, "MDM_UNLOCK state transition LOCKED source=register deviceCode=$deviceCode noProfileLocked=true")
+                        startCommandPollLoop(context)
+                        if (!wasLocked) {
+                            _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                        }
                     }
 
                     else -> {
@@ -241,16 +303,18 @@ class LauncherViewModel : ViewModel() {
         Log.i(tag, "unlock requested deviceCode=$deviceCode")
 
         viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true, unlockError = null, error = null)
+            _state.value = _state.value.copy(unlockSubmitting = true, unlockError = null, error = null)
+            Log.i(tag, "MDM_UNLOCK submit start deviceCode=$deviceCode")
             try {
+                Log.i(tag, "MDM_UNLOCK api start deviceCode=$deviceCode")
                 val token = getOrRefreshToken(deviceCode)
                 val resp = api.unlockDevice(
                     token = token,
                     req = DeviceUnlockRequest(deviceCode = deviceCode, password = password)
                 )
+                Log.i(tag, "MDM_UNLOCK api result status=${resp.status} message=${resp.message} deviceCode=$deviceCode")
 
-                if (resp.status == "ACTIVE") {
-                    Log.i(tag, "unlock response status=ACTIVE deviceCode=$deviceCode")
+                if (applyUnlockResponseForState(status = resp.status, message = resp.message, deviceCode = deviceCode)) {
                     val loadResult = loadConfig(context, source = "unlock")
                     Log.i(
                         tag,
@@ -258,17 +322,9 @@ class LauncherViewModel : ViewModel() {
                     )
                     if (!loadResult.success && _state.value.lockState != DeviceLockState.LOCKED) {
                         _state.value = _state.value.copy(
-                            loading = false,
                             unlockError = loadResult.error ?: "Đồng bộ cấu hình thất bại sau mở khóa"
                         )
                     }
-                } else {
-                    Log.w(tag, "unlock response status=${resp.status} deviceCode=$deviceCode")
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        lockState = DeviceLockState.LOCKED,
-                        unlockError = "Mật khẩu không chính xác."
-                    )
                 }
             } catch (e: MdmApi.ApiException) {
                 Log.w(
@@ -277,13 +333,38 @@ class LauncherViewModel : ViewModel() {
                     e
                 )
                 when {
+                    isProfileNotLinked(e) -> {
+                        Log.i(
+                            "MDM_PROFILE_STATE",
+                            "profile mapped source=unlock_exception linked=false noProfileMapped=true backendCode=${e.backendCode} httpCode=${e.httpCode}"
+                        )
+                        stopTelemetryLoops()
+                        _state.value = _state.value.copy(
+                            lockState = DeviceLockState.LOCKED,
+                            noProfileLocked = true,
+                            lockReason = NO_PROFILE_LOCKED_MESSAGE,
+                            lockContainmentStatus = "PENDING",
+                            lockContainmentErrorCode = null,
+                            unlockError = NO_PROFILE_UNLOCK_BLOCKED_MESSAGE,
+                            unlockSubmitting = false
+                        )
+                        Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_exception deviceCode=$deviceCode noProfileLocked=true")
+                        startCommandPollLoop(context)
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                    }
+
                     isDeviceLocked(e) -> {
                         stopTelemetryLoops()
                         _state.value = _state.value.copy(
-                            loading = false,
                             lockState = DeviceLockState.LOCKED,
-                            unlockError = e.message
+                            noProfileLocked = false,
+                            lockReason = null,
+                            lockContainmentStatus = "PENDING",
+                            lockContainmentErrorCode = null,
+                            unlockError = e.message,
+                            unlockSubmitting = false
                         )
+                        Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_exception deviceCode=$deviceCode noProfileLocked=false")
                         startCommandPollLoop(context)
                         _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                     }
@@ -291,19 +372,59 @@ class LauncherViewModel : ViewModel() {
                     isDeviceCodeMismatch(e) -> {
                         clearIdentitySession()
                         _state.value = _state.value.copy(
-                            loading = false,
                             unlockError = "Device session mismatch, vui lòng thử lại."
                         )
                     }
 
                     else -> {
-                        _state.value = _state.value.copy(loading = false, unlockError = e.message)
+                        _state.value = _state.value.copy(unlockError = e.message)
                     }
                 }
             } catch (t: Throwable) {
                 Log.e(tag, "unlock failure deviceCode=$deviceCode", t)
-                _state.value = _state.value.copy(loading = false, unlockError = t.message ?: "Lỗi mở khóa")
+                _state.value = _state.value.copy(unlockError = t.message ?: "Lỗi mở khóa")
+            } finally {
+                _state.value = _state.value.copy(unlockSubmitting = false)
+                Log.i(tag, "MDM_UNLOCK submit end submitting=false deviceCode=$deviceCode")
             }
+        }
+    }
+
+    private fun applyUnlockResponseForState(status: String, message: String?, deviceCode: String): Boolean {
+        val normalizedStatus = status.trim().uppercase()
+        val mappedNoProfile = isProfileNotLinkedStatusOrMessage(normalizedStatus, message)
+        Log.i(
+            "MDM_PROFILE_STATE",
+            "profile mapped source=unlock_response status=$normalizedStatus linked=${!mappedNoProfile} noProfileMapped=$mappedNoProfile"
+        )
+
+        return if (normalizedStatus == "ACTIVE") {
+            _state.value = _state.value.copy(
+                noProfileLocked = false,
+                lockReason = null,
+                unlockError = null,
+                error = null
+            )
+            Log.i(tag, "MDM_UNLOCK state transition ACTIVE source=unlock_response deviceCode=$deviceCode")
+            true
+        } else {
+            val unlockErrorMessage = if (mappedNoProfile) {
+                NO_PROFILE_UNLOCK_BLOCKED_MESSAGE
+            } else {
+                "Mật khẩu không chính xác."
+            }
+            _state.value = _state.value.copy(
+                lockState = DeviceLockState.LOCKED,
+                noProfileLocked = mappedNoProfile,
+                lockReason = if (mappedNoProfile) NO_PROFILE_LOCKED_MESSAGE else null,
+                lockContainmentStatus = "PENDING",
+                lockContainmentErrorCode = null,
+                unlockError = unlockErrorMessage,
+                loading = false,
+                unlockSubmitting = false
+            )
+            Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_response deviceCode=$deviceCode noProfileLocked=$mappedNoProfile")
+            false
         }
     }
 
@@ -345,6 +466,7 @@ class LauncherViewModel : ViewModel() {
 
     private data class PolicyApplyResult(
         val success: Boolean,
+        val policyStatus: String,
         val error: String? = null,
         val errorCode: String? = null
     )
@@ -388,10 +510,10 @@ class LauncherViewModel : ViewModel() {
                 val token = getOrRefreshToken(deviceCode)
                 val previousConfig = _state.value.config
 
-                Log.i(tag, "fetch config start source=$source deviceCode=$deviceCode")
+                Log.i(configFetchTag, "fetch config start source=$source deviceCode=$deviceCode")
                 val config = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
                 Log.i(
-                    tag,
+                    configFetchTag,
                     "fetch config success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
                 )
                 val appliedConfigHash = buildAppliedConfigHashOrNull(config)
@@ -409,9 +531,15 @@ class LauncherViewModel : ViewModel() {
                 val changed = previousConfig?.allowedApps != config.allowedApps ||
                         previousConfig?.configVersionEpochMillis != config.configVersionEpochMillis
 
+                val shouldStayLocked = shouldStayLockedOnConfigUpdate(_state.value.lockState, source)
+
                 _state.value = _state.value.copy(
                     loading = false,
-                    lockState = DeviceLockState.ACTIVE,
+                    lockState = if (shouldStayLocked) DeviceLockState.LOCKED else DeviceLockState.ACTIVE,
+                    noProfileLocked = false,
+                    lockReason = null,
+                    lockContainmentStatus = if (shouldStayLocked) "PENDING" else null,
+                    lockContainmentErrorCode = null,
                     config = config,
                     apps = apps,
                     error = null,
@@ -462,7 +590,7 @@ class LauncherViewModel : ViewModel() {
                 ConfigLoadResult(
                     success = false,
                     error = e.message,
-                    errorCode = e.backendCode ?: "HTTP_${e.httpCode}"
+                    errorCode = normalizeConfigErrorCode(e)
                 )
             } catch (t: Throwable) {
                 Log.e(tag, "loadConfig failure source=$source deviceCode=$deviceCode", t)
@@ -490,14 +618,16 @@ class LauncherViewModel : ViewModel() {
     ): PolicyApplyResult {
         val policy = DevicePolicyHelper(context)
         val policyReportedAt = System.currentTimeMillis()
-        Log.i(tag, "apply policy start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
+        Log.i(policyApplyTag, "apply policy start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
 
         if (!policy.isDeviceOwner()) {
-            Log.w(tag, "apply policy skipped deviceCode=$deviceCode ownerCheck=false")
+            Log.w(policyApplyTag, "apply policy skipped deviceCode=$deviceCode ownerCheck=false")
             reportPolicyStateNow(
                 token = token,
                 req = DevicePolicyStateReportRequest(
                     deviceCode = deviceCode,
+                    desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                    desiredConfigHash = appliedConfigHash,
                     policyApplyStatus = "FAILED",
                     policyApplyError = "Device is not owner, policy cannot be applied",
                     policyApplyErrorCode = "POLICY_NOT_DEVICE_OWNER",
@@ -506,6 +636,7 @@ class LauncherViewModel : ViewModel() {
             )
             return PolicyApplyResult(
                 success = false,
+                policyStatus = "FAILED",
                 error = "Device is not owner, policy cannot be applied",
                 errorCode = "POLICY_NOT_DEVICE_OWNER"
             )
@@ -513,7 +644,7 @@ class LauncherViewModel : ViewModel() {
 
         try {
             Log.i(tag, "applyFromServerConfig enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
-            policy.applyFromServerConfig(
+            val applyOutcome = policy.applyFromServerConfig(
                 launcherPackage = context.packageName,
                 allowedApps = config.allowedApps,
                 kioskMode = config.kioskMode,
@@ -541,17 +672,29 @@ class LauncherViewModel : ViewModel() {
                 token = token,
                 req = DevicePolicyStateReportRequest(
                     deviceCode = deviceCode,
-                    appliedConfigVersionEpochMillis = config.configVersionEpochMillis,
-                    appliedConfigHash = appliedConfigHash,
-                    policyApplyStatus = "SUCCESS",
+                    desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                    desiredConfigHash = appliedConfigHash,
+                    appliedConfigVersionEpochMillis = if (applyOutcome.status == "SUCCESS") config.configVersionEpochMillis else null,
+                    appliedConfigHash = if (applyOutcome.status == "SUCCESS") appliedConfigHash else null,
+                    policyApplyStatus = applyOutcome.status,
+                    policyApplyError = applyOutcome.error,
+                    policyApplyErrorCode = applyOutcome.errorCode,
                     policyAppliedAtEpochMillis = policyReportedAt
                 )
             )
-            Log.i(tag, "apply policy success deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
-            return PolicyApplyResult(success = true)
+            Log.i(
+                policyApplyTag,
+                "apply policy done deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} status=${applyOutcome.status} errorCode=${applyOutcome.errorCode}"
+            )
+            return PolicyApplyResult(
+                success = applyOutcome.status == "SUCCESS",
+                policyStatus = applyOutcome.status,
+                error = applyOutcome.error,
+                errorCode = applyOutcome.errorCode
+            )
         } catch (applyErr: Throwable) {
             Log.w(
-                tag,
+                policyApplyTag,
                 "apply policy failed deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} errorCode=POLICY_APPLY_FAILED message=${applyErr.message}"
             )
             runCatching {
@@ -559,6 +702,8 @@ class LauncherViewModel : ViewModel() {
                     token = token,
                     req = DevicePolicyStateReportRequest(
                         deviceCode = deviceCode,
+                        desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                        desiredConfigHash = appliedConfigHash,
                         policyApplyStatus = "FAILED",
                         policyApplyError = applyErr.message ?: "Policy apply failed",
                         policyApplyErrorCode = "POLICY_APPLY_FAILED",
@@ -568,6 +713,7 @@ class LauncherViewModel : ViewModel() {
             }
             return PolicyApplyResult(
                 success = false,
+                policyStatus = "FAILED",
                 error = applyErr.message ?: "Policy apply failed",
                 errorCode = "POLICY_APPLY_FAILED"
             )
@@ -709,7 +855,8 @@ class LauncherViewModel : ViewModel() {
         commandPollJob = viewModelScope.launch {
             var pollAttempt = 0L
             while (true) {
-                val deviceCode = cachedDeviceCode
+                // Initialize deviceCode if not cached yet
+                val deviceCode = cachedDeviceCode ?: resolveCurrentDeviceCode(context, reason = "pollLoop")
                 if (deviceCode != null) {
                     try {
                         pollAttempt += 1
@@ -781,13 +928,15 @@ class LauncherViewModel : ViewModel() {
         commandPollMutex.withLock {
             val token = getOrRefreshToken(deviceCode)
             runCatching { reportStateSnapshotNow(context, deviceCode, token) }
+            Log.i(pollTag, "poll start $pollLabel deviceCode=$deviceCode")
             val pollResp = api.pollCommands(
                 token = token,
                 req = DevicePollCommandsRequest(deviceCode = deviceCode, limit = 5)
             )
-            Log.i(tag, "poll success $pollLabel deviceCode=$deviceCode commandCount=${pollResp.commands.size}")
+            Log.i(pollTag, "poll success $pollLabel deviceCode=$deviceCode commandCount=${pollResp.commands.size}")
 
             for (cmd in pollResp.commands) {
+                Log.i(leaseTag, "lease received commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken} deviceCode=$deviceCode")
                 processPolledCommand(
                     context = context,
                     deviceCode = deviceCode,
@@ -802,56 +951,44 @@ class LauncherViewModel : ViewModel() {
         deviceCode: String,
         cmd: DeviceLeasedCommand,
     ) {
-        Log.i(
-            tag,
-            "command polled commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
-        )
-        Log.i(
-            tag,
-            "command trace begin commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken} deviceCode=$deviceCode"
-        )
+        Log.i(handleTag, "command begin commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken} deviceCode=$deviceCode")
 
-        val result = if (cmd.type.trim().lowercase() == "lock_screen") {
-            val policy = DevicePolicyHelper(context)
-            val isOwnerNow = isDeviceOwnerNow(context)
-            val isOwnerFromHelper = policy.isDeviceOwner()
-            Log.i(
-                tag,
-                "command trace lock_screen ownerCheck commandId=${cmd.id} dpm=$isOwnerNow helper=$isOwnerFromHelper"
-            )
-            if (!isOwnerNow || !isOwnerFromHelper) {
-                CommandExecResult(
-                    success = false,
-                    error = "Device is not owner, cannot enforce lock containment",
-                    errorCode = "POLICY_NOT_DEVICE_OWNER"
-                )
+        val result = runCatching {
+            if (cmd.type.trim().lowercase() == "lock_screen") {
+                val policy = DevicePolicyHelper(context)
+                val isOwnerNow = isDeviceOwnerNow(context)
+                val isOwnerFromHelper = policy.isDeviceOwner()
+                Log.i(handleTag, "lock_screen ownerCheck commandId=${cmd.id} dpm=$isOwnerNow helper=$isOwnerFromHelper")
+                if (!isOwnerNow || !isOwnerFromHelper) {
+                    CommandExecResult(
+                        success = false,
+                        error = "Device is not owner, cannot enforce lock containment",
+                        errorCode = "NOT_DEVICE_OWNER"
+                    )
+                } else {
+                    executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
+                }
             } else {
-                Log.i(
-                    tag,
-                    "command trace before execute commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
-                )
                 executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
             }
-        } else {
-            Log.i(
-                tag,
-                "command trace before execute commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}"
+        }.getOrElse { execErr ->
+            val apiErr = execErr as? MdmApi.ApiException
+            CommandExecResult(
+                success = false,
+                error = execErr.message ?: "Command execution failed",
+                errorCode = when {
+                    apiErr != null && isProfileNotLinked(apiErr) -> "PROFILE_NOT_LINKED"
+                    else -> "COMMAND_EXEC_EXCEPTION"
+                }
             )
-            executeCommand(context, cmd.type, commandId = cmd.id, leaseToken = cmd.leaseToken)
         }
 
-        Log.i(
-            tag,
-            "command trace result commandId=${cmd.id} type=${cmd.type} success=${result.success} errorCode=${result.errorCode} error=${result.error} output=${result.output}"
-        )
+        Log.i(handleTag, "command result commandId=${cmd.id} type=${cmd.type} success=${result.success} errorCode=${result.errorCode}")
 
         val ackResult = if (result.success) "SUCCESS" else "FAILED"
         runCatching {
             val ackToken = getOrRefreshToken(deviceCode)
-            Log.i(
-                tag,
-                "ack payload commandId=${cmd.id} leaseToken=${cmd.leaseToken} result=$ackResult errorCode=${result.errorCode} error=${result.error} output=${result.output}"
-            )
+            Log.i(handleTag, "ack payload commandId=${cmd.id} leaseToken=${cmd.leaseToken} result=$ackResult errorCode=${result.errorCode}")
             api.ackCommand(
                 token = ackToken,
                 req = DeviceAckCommandRequest(
@@ -865,16 +1002,9 @@ class LauncherViewModel : ViewModel() {
                 )
             )
         }.onSuccess {
-            Log.i(
-                tag,
-                "ack result commandId=${cmd.id} type=${cmd.type} result=${if (result.success) "SUCCESS" else "FAILED"}"
-            )
+            Log.i(handleTag, "ack result commandId=${cmd.id} type=${cmd.type} result=$ackResult")
         }.onFailure { ackErr ->
-            Log.e(
-                tag,
-                "ack failure commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}",
-                ackErr
-            )
+            Log.e(handleTag, "ack failure commandId=${cmd.id} type=${cmd.type} leaseToken=${cmd.leaseToken}", ackErr)
         }
     }
 
@@ -961,19 +1091,13 @@ class LauncherViewModel : ViewModel() {
     }
 
     private suspend fun reportPolicyStateNow(token: String, req: DevicePolicyStateReportRequest) {
-        Log.i(
-            tag,
-            "report policy-state start deviceCode=${req.deviceCode} status=${req.policyApplyStatus} appliedVersion=${req.appliedConfigVersionEpochMillis}"
-        )
+        Log.i(policyReportTag, "policy-state start deviceCode=${req.deviceCode} status=${req.policyApplyStatus} appliedVersion=${req.appliedConfigVersionEpochMillis}")
         try {
             api.reportPolicyState(token = token, req = req)
-            Log.i(tag, "report policy-state success deviceCode=${req.deviceCode} status=${req.policyApplyStatus}")
+            Log.i(policyReportTag, "policy-state success deviceCode=${req.deviceCode} status=${req.policyApplyStatus}")
         } catch (e: MdmApi.ApiException) {
             if (isDeviceCodeMismatch(e)) clearIdentitySession()
-            Log.w(
-                tag,
-                "report policy-state failure deviceCode=${req.deviceCode} status=${req.policyApplyStatus} code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}"
-            )
+            Log.w(policyReportTag, "policy-state failure deviceCode=${req.deviceCode} status=${req.policyApplyStatus} code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}")
             throw e
         }
     }
@@ -1221,40 +1345,57 @@ class LauncherViewModel : ViewModel() {
         }
 
         return when (normalizedType) {
-            "refresh_config", "sync_config" -> {
-                if (_state.value.lockState == DeviceLockState.LOCKED) {
-                    Log.i(
-                        tag,
-                        "command $normalizedType deferred commandId=$commandId leaseToken=$leaseToken reason=device_locked_local_state"
-                    )
-                    return CommandExecResult(
-                        success = true,
-                        output = "Deferred until device unlock"
+            "refresh_config" -> {
+                val result = loadConfig(context, source = "command:$normalizedType")
+                if (result.success) {
+                    CommandExecResult(success = true, output = "Config refreshed and policy reported")
+                } else {
+                    CommandExecResult(
+                        success = false,
+                        error = result.error ?: "Refresh config failed",
+                        errorCode = result.errorCode ?: "REFRESH_CONFIG_FAILED"
                     )
                 }
+            }
 
-                val result = loadConfig(context, source = "command:$normalizedType")
-                when {
-                    result.success -> {
-                        CommandExecResult(success = true, output = "Config refreshed and policy reported")
-                    }
+            "sync_config" -> {
+                val deviceCode = resolveCurrentDeviceCode(context, reason = "command_sync_config")
+                val token = getOrRefreshToken(deviceCode)
+                Log.i(configFetchTag, "fetch config start source=command:sync_config deviceCode=$deviceCode")
+                val desired = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+                Log.i(configFetchTag, "fetch config success source=command:sync_config deviceCode=$deviceCode configVersion=${desired.configVersionEpochMillis}")
 
-                    shouldDeferConfigCommandWhileLocked(result) -> {
-                        Log.i(
-                            tag,
-                            "command $normalizedType deferred commandId=$commandId leaseToken=$leaseToken reason=device_locked_backend_gate errorCode=${result.errorCode}"
+                val desiredHash = buildAppliedConfigHashOrNull(desired)
+                val applied = _state.value.config
+                val appliedHash = applied?.let { buildAppliedConfigHashOrNull(it) }
+                val alreadySynced = applied != null &&
+                        applied.configVersionEpochMillis == desired.configVersionEpochMillis &&
+                        desiredHash != null &&
+                        desiredHash == appliedHash
+
+                if (alreadySynced) {
+                    reportPolicyStateNow(
+                        token = token,
+                        req = DevicePolicyStateReportRequest(
+                            deviceCode = deviceCode,
+                            desiredConfigVersionEpochMillis = desired.configVersionEpochMillis,
+                            desiredConfigHash = desiredHash,
+                            appliedConfigVersionEpochMillis = desired.configVersionEpochMillis,
+                            appliedConfigHash = desiredHash,
+                            policyApplyStatus = "SUCCESS",
+                            policyAppliedAtEpochMillis = System.currentTimeMillis()
                         )
-                        CommandExecResult(
-                            success = true,
-                            output = "Deferred until device unlock"
-                        )
-                    }
-
-                    else -> {
+                    )
+                    CommandExecResult(success = true, output = "Config already synced")
+                } else {
+                    val result = loadConfig(context, source = "command:sync_config")
+                    if (result.success) {
+                        CommandExecResult(success = true, output = "Config synced and policy reported")
+                    } else {
                         CommandExecResult(
                             success = false,
-                            error = result.error ?: "Refresh config failed",
-                            errorCode = result.errorCode ?: "REFRESH_CONFIG_FAILED"
+                            error = result.error ?: "Sync config failed",
+                            errorCode = result.errorCode ?: "SYNC_CONFIG_FAILED"
                         )
                     }
                 }
@@ -1269,23 +1410,67 @@ class LauncherViewModel : ViewModel() {
                     "executeCommand lock_screen ownerCheck commandId=$commandId leaseToken=$leaseToken helper=$isOwnerFromHelper dpm=$isOwnerFromDpm"
                 )
                 if (!isOwnerFromHelper || !isOwnerFromDpm) {
+                    _state.value = _state.value.copy(
+                        lockContainmentStatus = "FAILED",
+                        lockContainmentErrorCode = "NOT_DEVICE_OWNER"
+                    )
                     CommandExecResult(
                         success = false,
                         error = "Device is not owner, cannot enforce lock containment",
-                        errorCode = "POLICY_NOT_DEVICE_OWNER"
+                        errorCode = "NOT_DEVICE_OWNER"
                     )
                 } else try {
-                    policy.applyLockedContainment(context.packageName)
-                    stopTelemetryLoops()
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        lockState = DeviceLockState.LOCKED,
-                        config = null,
-                        apps = emptyList()
-                    )
-                    startCommandPollLoop(context)
-                    _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
-                    CommandExecResult(success = true, output = "Lock containment applied")
+                    val activity = context as? Activity
+                    if (activity == null) {
+                        CommandExecResult(
+                            success = false,
+                            error = "Lock containment requires launcher activity context",
+                            errorCode = "LOCK_TASK_NOT_ALLOWED"
+                        )
+                    } else {
+                        val containment = policy.ensureStrictLockedContainment(activity = activity)
+                        val lockTaskModeState = runCatching {
+                            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                            am.lockTaskModeState
+                        }.getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
+                        val finalContainmentStatus = if (
+                            containment.status == "FULL" &&
+                            lockTaskModeState != ActivityManager.LOCK_TASK_MODE_LOCKED
+                        ) {
+                            DevicePolicyHelper.LockContainmentOutcome(
+                                status = "FAILED",
+                                error = "Lock task is not active",
+                                errorCode = "LOCK_TASK_NOT_ACTIVE"
+                            )
+                        } else {
+                            containment
+                        }
+                        Log.i(
+                            handleTag,
+                            "lock_screen containment commandId=$commandId leaseToken=$leaseToken status=${finalContainmentStatus.status} errorCode=${finalContainmentStatus.errorCode}"
+                        )
+                        stopTelemetryLoops()
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            lockState = DeviceLockState.LOCKED,
+                            lockContainmentStatus = finalContainmentStatus.status,
+                            lockContainmentErrorCode = finalContainmentStatus.errorCode,
+                            config = null,
+                            apps = emptyList()
+                        )
+                        startCommandPollLoop(context)
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                        val lockSuccess = finalContainmentStatus.status == "FULL"
+                        if (lockSuccess) {
+                            CommandExecResult(success = true, output = "Lock containment applied")
+                        } else {
+                            CommandExecResult(
+                                success = false,
+                                error = finalContainmentStatus.error ?: "Lock containment incomplete",
+                                errorCode = finalContainmentStatus.errorCode ?: "LOCK_CONTAINMENT_FAILED"
+                            )
+                        }
+                    }
                 } catch (t: Throwable) {
                     CommandExecResult(
                         success = false,
@@ -1299,13 +1484,6 @@ class LauncherViewModel : ViewModel() {
         }
     }
 
-    private fun shouldDeferConfigCommandWhileLocked(result: ConfigLoadResult): Boolean {
-        if (_state.value.lockState != DeviceLockState.LOCKED) return false
-        if (result.errorCode == "HTTP_423") return true
-
-        val errorText = result.error?.lowercase().orEmpty()
-        return errorText.contains("device is locked") || errorText.contains("locked")
-    }
 
     private fun isDeviceOwnerNow(context: Context): Boolean {
         return runCatching {
@@ -1641,18 +1819,95 @@ class LauncherViewModel : ViewModel() {
         return e.httpCode == 423 || e.backendCode == "DEVICE_LOCKED" || msg.contains("locked")
     }
 
+    private fun isProfileNotLinked(e: MdmApi.ApiException): Boolean {
+        val normalizedBackendCode = normalizeProfileNotLinkedMarker(e.backendCode)
+        val normalizedMessage = normalizeProfileNotLinkedMarker(e.message)
+        return normalizedBackendCode == "profile_not_linked" ||
+            normalizedBackendCode == "device_profile_not_linked" ||
+            normalizedMessage.contains("profile_not_linked") ||
+            normalizedMessage.contains("device_profile_not_linked") ||
+            (e.httpCode == 404 && normalizedMessage.contains("profile_not_linked")) ||
+            (e.httpCode == 423 && normalizedBackendCode == "device_profile_not_linked")
+    }
+
+    private fun isProfileNotLinkedStatusOrMessage(status: String?, message: String?): Boolean {
+        val normalizedStatus = normalizeProfileNotLinkedMarker(status)
+        if (normalizedStatus == "device_profile_not_linked" || normalizedStatus == "profile_not_linked") {
+            return true
+        }
+        val normalizedMessage = normalizeProfileNotLinkedMarker(message)
+        return normalizedMessage.contains("device_profile_not_linked") ||
+            normalizedMessage.contains("profile_not_linked")
+    }
+
+    private fun normalizeProfileNotLinkedMarker(value: String?): String {
+        return value
+            ?.trim()
+            ?.lowercase()
+            ?.replace('-', '_')
+            ?.replace(' ', '_')
+            ?: ""
+    }
+
+    private fun shouldStayLockedOnConfigUpdate(currentLockState: DeviceLockState, source: String): Boolean {
+        // Keep LOCKED lifecycle unless unlock explicitly succeeds.
+        return currentLockState == DeviceLockState.LOCKED && source != "unlock"
+    }
+
+    private fun normalizeConfigErrorCode(e: MdmApi.ApiException): String {
+        return when {
+            isProfileNotLinked(e) -> "PROFILE_NOT_LINKED"
+            !e.backendCode.isNullOrBlank() -> e.backendCode
+            else -> "HTTP_${e.httpCode}"
+        }
+    }
+
     private fun handleApiException(e: MdmApi.ApiException, duringConfig: Boolean, context: Context? = null) {
         when {
-            isDeviceLocked(e) -> {
+            isProfileNotLinked(e) -> {
+                Log.i(
+                    "MDM_PROFILE_STATE",
+                    "profile mapped source=api_exception linked=false noProfileMapped=true backendCode=${e.backendCode} httpCode=${e.httpCode}"
+                )
                 stopTelemetryLoops()
                 _state.value = _state.value.copy(
                     loading = false,
                     lockState = DeviceLockState.LOCKED,
+                    noProfileLocked = true,
+                    lockReason = NO_PROFILE_LOCKED_MESSAGE,
+                    lockContainmentStatus = "PENDING",
+                    lockContainmentErrorCode = null,
+                    config = null,
+                    apps = emptyList(),
+                    error = if (duringConfig) NO_PROFILE_LOCKED_MESSAGE else null,
+                    unlockError = NO_PROFILE_UNLOCK_BLOCKED_MESSAGE,
+                    unlockSubmitting = false
+                )
+                Log.i(tag, "MDM_UNLOCK state transition LOCKED source=api_exception noProfileLocked=true")
+                context?.let { startCommandPollLoop(it) }
+                _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+            }
+
+            isDeviceLocked(e) -> {
+                Log.i(
+                    "MDM_PROFILE_STATE",
+                    "profile mapped source=api_exception linked=null noProfileMapped=false backendCode=${e.backendCode} httpCode=${e.httpCode}"
+                )
+                stopTelemetryLoops()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    noProfileLocked = false,
+                    lockReason = null,
+                    lockContainmentStatus = "PENDING",
+                    lockContainmentErrorCode = null,
                     config = null,
                     apps = emptyList(),
                     error = if (duringConfig) "Thiết bị đang bị khóa." else null,
-                    unlockError = if (duringConfig) null else e.message
+                    unlockError = if (duringConfig) null else e.message,
+                    unlockSubmitting = false
                 )
+                Log.i(tag, "MDM_UNLOCK state transition LOCKED source=api_exception noProfileLocked=false")
                 context?.let { startCommandPollLoop(it) }
                 _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
             }
@@ -1673,4 +1928,22 @@ class LauncherViewModel : ViewModel() {
             }
         }
     }
+
+    internal fun debugApplyApiExceptionForTest(e: MdmApi.ApiException, duringConfig: Boolean) {
+        handleApiException(e = e, duringConfig = duringConfig, context = null)
+    }
+
+    internal fun debugApplyUnlockResponseForTest(status: String, message: String?, deviceCode: String = "test-device"): Boolean {
+        return applyUnlockResponseForState(status = status, message = message, deviceCode = deviceCode)
+    }
+
+    internal fun debugSetStateForTest(state: LauncherUiState) {
+        _state.value = state
+    }
 }
+
+
+
+
+
+
