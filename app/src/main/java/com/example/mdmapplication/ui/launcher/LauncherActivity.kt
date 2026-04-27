@@ -3,7 +3,6 @@ package com.example.mdmapplication.ui.launcher
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.admin.DevicePolicyManager
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -22,16 +21,32 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.example.mdmapplication.BuildConfig
 import com.example.mdmapplication.R
 import com.example.mdmapplication.device.DevicePolicyHelper
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -45,11 +60,15 @@ class LauncherActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var recoveryGeneration = 0
     private var lastBringToFrontAtMs = 0L
+    private var lastLockTaskStartAtMs = 0L
     private var lockContainmentInFlight = false
+    private var languageSelected = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(tag, "onCreate savedInstanceState=${savedInstanceState != null} taskId=$taskId")
+        val initialLanguage = readAppLanguage()
+        languageSelected = initialLanguage != null
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -67,16 +86,12 @@ class LauncherActivity : ComponentActivity() {
             }
         })
 
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val policy = DevicePolicyHelper(this)
-        val isDo = dpm.isDeviceOwnerApp(packageName)
-
-        if (isDo && BuildConfig.DEBUG) {
-            policy.clearPersistentPreferredActivities()
-        }
 
         val wakeReason = parseWakeReason(intent) ?: "app_launch:onCreate"
-        triggerRuntimeWake(reason = wakeReason, force = true)
+        if (languageSelected) {
+            triggerRuntimeWake(reason = wakeReason, force = true)
+        }
 
         lifecycleScope.launch {
             viewModel.commandActions.collectLatest { action ->
@@ -90,11 +105,23 @@ class LauncherActivity : ComponentActivity() {
                     }
 
                     LauncherCommandAction.AllowedAppsUpdated -> {
-                        // Recovery foreground trước để trnh kẹt app cũ (mn xm) khi profile vừa đổi.
-                        bringSelfToFrontOnce()
-                        if (isDo) {
-                            policy.startLockTaskIfPermitted(this@LauncherActivity)
-                        }
+                        mainHandler.postDelayed({
+                            val current = viewModel.state.value
+                            if (
+                                current.setupState == SetupState.ENFORCEMENT_ACTIVE &&
+                                !current.applyingConfiguration
+                            ) {
+                                // Recovery foreground before lock-task so profile changes do not leave an old app on top.
+                                bringSelfToFrontOnce()
+                            }
+                            if (
+                                current.setupState == SetupState.ENFORCEMENT_ACTIVE &&
+                                !current.applyingConfiguration &&
+                                policy.isDeviceOwner()
+                            ) {
+                                policy.startLockTaskIfPermitted(this@LauncherActivity)
+                            }
+                        }, 750L)
                         Toast.makeText(
                             this@LauncherActivity,
                             "Allowed apps updated",
@@ -107,6 +134,19 @@ class LauncherActivity : ComponentActivity() {
 
         setContent {
             val st by viewModel.state.collectAsState()
+            var selectedLanguage by remember { mutableStateOf(initialLanguage) }
+
+            if (selectedLanguage == null) {
+                LanguageSelectionScreen { language ->
+                    saveAppLanguage(language)
+                    selectedLanguage = language
+                    languageSelected = true
+                    triggerRuntimeWake(reason = "language:selected", force = true)
+                }
+                return@setContent
+            }
+
+            val language = selectedLanguage ?: AppLanguage.VI
 
             LaunchedEffect(st.unlockError) {
                 val err = st.unlockError
@@ -121,57 +161,97 @@ class LauncherActivity : ComponentActivity() {
                     runCatching { stopLockTask() }
                         .onFailure { Log.w(tag, "stopLockTask on unlock transition failed", it) }
                 }
-                if (st.lockState == DeviceLockState.LOCKED) {
-                    enforceLockedContainment("state:locked")
-                }
                 lastKnownLockState = st.lockState
             }
 
-            when (st.lockState) {
-                DeviceLockState.LOCKED -> {
-                    BackHandler(enabled = true) { }
-                    UnlockScreen(
-                        st.unlockError,
-                        st.lockReason,
-                        st.noProfileLocked,
-                        st.lockState,
-                        st.lockContainmentStatus,
-                        st.lockContainmentErrorCode,
-                        st.loading,
-                        st.unlockSubmitting,
-                        { password ->
-                            Log.i(
-                                "MDM_UNLOCK_UI",
-                                "activity onUnlock received passwordLength=${password.length} lockedState=${st.lockState.name} noProfileLocked=${st.noProfileLocked}"
-                            )
-                            viewModel.unlock(this@LauncherActivity, password)
-                        }
-                    )
+            LaunchedEffect(st.lockState, st.setupState, st.applyingConfiguration) {
+                if (
+                    st.lockState == DeviceLockState.LOCKED &&
+                    st.setupState == SetupState.ENFORCEMENT_ACTIVE &&
+                    !st.applyingConfiguration
+                ) {
+                    delay(750L)
+                    val current = viewModel.state.value
+                    if (
+                        current.lockState == DeviceLockState.LOCKED &&
+                        current.setupState == SetupState.ENFORCEMENT_ACTIVE &&
+                        !current.applyingConfiguration
+                    ) {
+                        enforceLockedContainment("state:locked:delayed")
+                    }
+                }
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                when {
+                    st.setupState != SetupState.ENFORCEMENT_ACTIVE -> {
+                        ProvisioningScreen(
+                            setupState = st.setupState,
+                            steps = st.setupSteps,
+                            loading = st.loading,
+                            error = st.error,
+                            rebootError = st.rebootError,
+                            rebootRequested = st.rebootRequested,
+                            language = language,
+                            onLanguageChange = { nextLanguage ->
+                                saveAppLanguage(nextLanguage)
+                                selectedLanguage = nextLanguage
+                                languageSelected = true
+                            },
+                            onRetry = { triggerRuntimeWake("provisioning:retry", force = true) },
+                            onReboot = { viewModel.rebootAfterProvisioning(this@LauncherActivity) }
+                        )
+                    }
+
+                    st.lockState == DeviceLockState.LOCKED -> {
+                        BackHandler(enabled = true) { }
+                        UnlockScreen(
+                            st.unlockError,
+                            st.lockReason,
+                            st.noProfileLocked,
+                            st.lockState,
+                            st.lockContainmentStatus,
+                            st.lockContainmentErrorCode,
+                            st.loading,
+                            st.unlockSubmitting,
+                            { password ->
+                                Log.i(
+                                    "MDM_UNLOCK_UI",
+                                    "activity onUnlock received passwordLength=${password.length} lockedState=${st.lockState.name} noProfileLocked=${st.noProfileLocked}"
+                                )
+                                viewModel.unlock(this@LauncherActivity, password)
+                            }
+                        )
+                    }
+
+                    st.lockState == DeviceLockState.ACTIVE -> {
+                        LauncherScreen(
+                            apps = st.apps,
+                            isDeviceOwner = st.isDeviceOwner,
+                            onAppClick = { pkg ->
+                                packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+                            },
+                            onClearPersistentHome = {
+                                if (st.isDeviceOwner) policy.clearPersistentPreferredActivities()
+                            },
+                            onApplyKioskHome = {
+                                triggerRuntimeWake("manualApplyKioskHome", force = true)
+                            },
+                            onExitLockTask = { runCatching { stopLockTask() } }
+                        )
+                    }
+
+                    else -> {
+                        LoadingOrErrorScreen(
+                            loading = st.loading,
+                            error = st.error,
+                            onRetry = { triggerRuntimeWake("manualRetry", force = true) }
+                        )
+                    }
                 }
 
-                DeviceLockState.ACTIVE -> {
-                    LauncherScreen(
-                        apps = st.apps,
-                        isDeviceOwner = isDo,
-                        onAppClick = { pkg ->
-                            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
-                        },
-                        onClearPersistentHome = {
-                            if (isDo) policy.clearPersistentPreferredActivities()
-                        },
-                        onApplyKioskHome = {
-                            triggerRuntimeWake("manualApplyKioskHome", force = true)
-                        },
-                        onExitLockTask = { runCatching { stopLockTask() } }
-                    )
-                }
-
-                DeviceLockState.UNKNOWN -> {
-                    LoadingOrErrorScreen(
-                        loading = st.loading,
-                        error = st.error,
-                        onRetry = { triggerRuntimeWake("manualRetry", force = true) }
-                    )
+                if (st.applyingConfiguration) {
+                    ApplyingConfigurationOverlay()
                 }
             }
         }
@@ -186,7 +266,7 @@ class LauncherActivity : ComponentActivity() {
         super.onResume()
         recoveryGeneration += 1
         Log.i(tag, "onResume taskId=$taskId")
-        enforceLockedContainment("lifecycle:onResume")
+        scheduleDelayedLockContainment("lifecycle:onResume")
         if (viewModel.state.value.lockState != DeviceLockState.LOCKED) {
             triggerRuntimeWake("ui:onResume")
         } else {
@@ -197,7 +277,7 @@ class LauncherActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            enforceLockedContainment("lifecycle:onWindowFocusChanged")
+            scheduleDelayedLockContainment("lifecycle:onWindowFocusChanged")
         }
     }
 
@@ -257,7 +337,10 @@ class LauncherActivity : ComponentActivity() {
 
     private fun bringSelfToFrontOnce() {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastBringToFrontAtMs < 600L) return
+        if (now - lastBringToFrontAtMs < 4_000L) {
+            Log.i(lockContainmentTag, "bringSelfToFront skipped reason=cooldown")
+            return
+        }
         lastBringToFrontAtMs = now
         startActivity(
             Intent(this, LauncherActivity::class.java).apply {
@@ -271,14 +354,41 @@ class LauncherActivity : ComponentActivity() {
     }
 
     private fun triggerRuntimeWake(reason: String, force: Boolean = false) {
+        if (!languageSelected) {
+            Log.i(tag, "runtime retrigger skipped reason=$reason languageSelected=false")
+            return
+        }
         Log.i(tag, "runtime retrigger reason=$reason force=$force")
         viewModel.requestRuntimeWake(context = this, reason = reason, force = force)
+    }
+
+    private fun readAppLanguage(): AppLanguage? =
+        AppLanguage.fromStorage(
+            getSharedPreferences(LANGUAGE_PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_APP_LANGUAGE, null)
+        )
+
+    private fun saveAppLanguage(language: AppLanguage) {
+        getSharedPreferences(LANGUAGE_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_APP_LANGUAGE, language.storageValue)
+            .apply()
     }
 
     private fun enforceLockedContainment(reason: String) {
         val st = viewModel.state.value
         if (st.lockState != DeviceLockState.LOCKED) return
+        if (st.setupState != SetupState.ENFORCEMENT_ACTIVE) return
+        if (st.applyingConfiguration) {
+            Log.i(lockContainmentTag, "enforce skip reason=policyInFlight source=$reason")
+            return
+        }
         if (lockContainmentInFlight) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLockTaskStartAtMs < 4_000L) {
+            Log.i(lockContainmentTag, "enforce skip reason=lockTaskCooldown source=$reason")
+            return
+        }
         val resumedAndFocused =
             lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && hasWindowFocus()
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
@@ -307,6 +417,7 @@ class LauncherActivity : ComponentActivity() {
         val policy = DevicePolicyHelper(this)
         lockContainmentInFlight = true
         val outcome = try {
+            lastLockTaskStartAtMs = SystemClock.elapsedRealtime()
             runCatching {
                 policy.ensureStrictLockedContainment(activity = this)
             }.getOrElse { err ->
@@ -324,6 +435,19 @@ class LauncherActivity : ComponentActivity() {
         viewModel.updateLockContainment(outcome.status, outcome.errorCode)
         Log.i(tag, "locked containment reason=$reason status=${outcome.status} errorCode=${outcome.errorCode}")
         logTopActivityState("after:$reason")
+    }
+
+    private fun scheduleDelayedLockContainment(reason: String) {
+        mainHandler.postDelayed({
+            val current = viewModel.state.value
+            if (
+                current.lockState == DeviceLockState.LOCKED &&
+                current.setupState == SetupState.ENFORCEMENT_ACTIVE &&
+                !current.applyingConfiguration
+            ) {
+                enforceLockedContainment("$reason:delayed")
+            }
+        }, 750L)
     }
 
     private fun scheduleDelayedForegroundRecovery(reason: String) {
@@ -433,6 +557,8 @@ class LauncherActivity : ComponentActivity() {
     companion object {
         const val ACTION_RUNTIME_WAKE = "com.example.mdmapplication.action.RUNTIME_WAKE"
         const val EXTRA_WAKE_REASON = "extra_wake_reason"
+        private const val LANGUAGE_PREFS_NAME = "mdm_app_preferences"
+        private const val KEY_APP_LANGUAGE = "app_language"
         private const val UNLOCK_ERROR_CHANNEL_ID = "unlock_error_channel"
         private const val UNLOCK_ERROR_NOTIFICATION_ID = 4001
 
@@ -446,5 +572,30 @@ class LauncherActivity : ComponentActivity() {
                             Intent.FLAG_ACTIVITY_SINGLE_TOP
                 )
             }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun ApplyingConfigurationOverlay() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Surface(
+            color = Color(0xEE101827),
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .padding(20.dp)
+                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+        ) {
+            Text(
+                text = "Đang áp dụng hồ sơ cấu hình...",
+                color = Color(0xFFF2F7FF),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+        }
     }
 }

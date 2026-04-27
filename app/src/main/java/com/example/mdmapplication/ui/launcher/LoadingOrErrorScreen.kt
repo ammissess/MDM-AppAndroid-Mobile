@@ -25,9 +25,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-private val LoadingBgTop = Color(0x3306101E)
-private val LoadingBgMid = Color(0x220A1324)
-private val LoadingBgBottom = Color(0x4403070D)
+private val LoadingBgTop = Color(0xFF06101E)
+private val LoadingBgMid = Color(0xFF0A1324)
+private val LoadingBgBottom = Color(0xFF03070D)
 private val LoadingGlass = Color(0x99101827)
 private val LoadingBorder = Color.White.copy(alpha = 0.12f)
 private val LoadingText = Color(0xFFF2F7FF)

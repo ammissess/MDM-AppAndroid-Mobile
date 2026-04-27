@@ -31,6 +31,12 @@ class DevicePolicyHelper(private val context: Context) {
         val errorCode: String? = null
     )
 
+    data class RebootOutcome(
+        val success: Boolean,
+        val error: String? = null,
+        val errorCode: String? = null
+    )
+
     private data class UsbDataSignalingOutcome(
         val applied: Boolean,
         val enabled: Boolean? = null,
@@ -175,7 +181,44 @@ class DevicePolicyHelper(private val context: Context) {
         }
     }
 
-    fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(selfPackage)
+    fun isDeviceOwner(): Boolean =
+        runCatching { dpm.isDeviceOwnerApp(selfPackage) }
+            .onFailure { Log.w(tag, "isDeviceOwner failed", it) }
+            .getOrDefault(false)
+
+    fun isLockTaskPermitted(packageName: String = selfPackage): Boolean =
+        runCatching { dpm.isLockTaskPermitted(packageName) }
+            .onFailure { Log.w(tag, "isLockTaskPermitted failed package=$packageName", it) }
+            .getOrDefault(false)
+
+    fun rebootIfDeviceOwner(): RebootOutcome {
+        if (!isDeviceOwner()) {
+            return RebootOutcome(
+                success = false,
+                error = "Device is not owner, cannot reboot",
+                errorCode = "NOT_DEVICE_OWNER"
+            )
+        }
+
+        return try {
+            dpm.reboot(admin)
+            RebootOutcome(success = true)
+        } catch (e: SecurityException) {
+            Log.w(tag, "rebootIfDeviceOwner security failure", e)
+            RebootOutcome(
+                success = false,
+                error = e.message ?: "Device owner reboot denied",
+                errorCode = "REBOOT_SECURITY_EXCEPTION"
+            )
+        } catch (e: IllegalStateException) {
+            Log.w(tag, "rebootIfDeviceOwner illegal state", e)
+            RebootOutcome(
+                success = false,
+                error = e.message ?: "Device owner reboot unavailable",
+                errorCode = "REBOOT_ILLEGAL_STATE"
+            )
+        }
+    }
 
     fun setLockTaskPackages(packages: Array<String>) {
         restoreSelfBeforePolicy()
@@ -577,6 +620,8 @@ class DevicePolicyHelper(private val context: Context) {
         return homePackage == selfPackage
     }
 
+    fun isDefaultLauncher(): Boolean = isDefaultLauncherApp()
+
     fun enforceLockedContainment(
         activity: Activity,
         launcherPackage: String,
@@ -633,7 +678,7 @@ class DevicePolicyHelper(private val context: Context) {
         }
         Log.i(lockContainmentTag, "allowlist package=$selfPackage")
 
-        val isPermitted = runCatching { dpm.isLockTaskPermitted(selfPackage) }.getOrDefault(false)
+        val isPermitted = isLockTaskPermitted(selfPackage)
         if (!isPermitted) {
             val outcome = LockContainmentOutcome(
                 status = "PARTIAL",
@@ -652,10 +697,22 @@ class DevicePolicyHelper(private val context: Context) {
         val modeStateBefore = runCatching { activityManager.lockTaskModeState }
             .getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
 
-        val startError = if (canStartLockTask) {
-            runCatching { activity.startLockTask() }.exceptionOrNull()
-        } else {
-            IllegalStateException("Activity not foreground enough for startLockTask")
+        val alreadyLocked = modeStateBefore == ActivityManager.LOCK_TASK_MODE_LOCKED
+        val startError = when {
+            alreadyLocked -> {
+                Log.i(lockContainmentTag, "startLockTask skipped reason=already_locked")
+                null
+            }
+
+            canStartLockTask -> {
+                Log.i(lockContainmentTag, "startLockTask invoked")
+                runCatching { activity.startLockTask() }.exceptionOrNull()
+            }
+
+            else -> {
+                Log.i(lockContainmentTag, "startLockTask skipped reason=activity_not_foreground")
+                IllegalStateException("Activity not foreground enough for startLockTask")
+            }
         }
 
         val modeStateAfterStart = runCatching { activityManager.lockTaskModeState }
@@ -683,7 +740,7 @@ class DevicePolicyHelper(private val context: Context) {
             )
             return outcome
         }
-        Log.i(lockContainmentTag, "start result=${if (startError == null) "ok" else "already_locked_or_recovered"}")
+        Log.i(lockContainmentTag, "start result=${if (alreadyLocked) "already_locked" else if (startError == null) "ok" else "recovered"}")
 
         val outcome = when {
             modeStateAfterDelay != expectedLocked -> {
@@ -715,9 +772,20 @@ class DevicePolicyHelper(private val context: Context) {
     fun startLockTaskIfPermitted(activity: Activity) {
         restoreSelfBeforePolicy()
         runCatching {
-            if (dpm.isLockTaskPermitted(selfPackage)) {
-                activity.startLockTask()
+            if (!isLockTaskPermitted(selfPackage)) {
+                Log.i(tag, "startLockTaskIfPermitted skipped reason=not_permitted")
+                return@runCatching
             }
+
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val modeState = activityManager.lockTaskModeState
+            if (modeState == ActivityManager.LOCK_TASK_MODE_LOCKED) {
+                Log.i(tag, "startLockTaskIfPermitted skipped reason=already_locked")
+                return@runCatching
+            }
+
+            Log.i(tag, "startLockTaskIfPermitted invoked")
+            activity.startLockTask()
         }.onFailure { Log.w(tag, "startLockTaskIfPermitted failed", it) }
     }
 }

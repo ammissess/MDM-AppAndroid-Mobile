@@ -22,15 +22,15 @@ enum class SetupState {
 }
 
 enum class ProvisioningStepKey(val label: String) {
-    APP_INSTALLED("Ứng dụng đã cài"),
-    DEVICE_OWNER_ACTIVE("Device Owner đã kích hoạt"),
-    BACKEND_REACHABLE("Kết nối backend"),
+    APP_INSTALLED("Ứng dụng đã cài đặt"),
+    DEVICE_OWNER_ACTIVE("Quyền quản trị thiết bị"),
+    BACKEND_REACHABLE("Kết nối máy chủ"),
     DEVICE_REGISTERED("Thiết bị đã đăng ký"),
-    PROFILE_LINKED("Hồ sơ đã gán"),
-    CONFIG_FETCHED("Cấu hình đã tải"),
+    PROFILE_LINKED("Hồ sơ cấu hình"),
+    CONFIG_FETCHED("Nhận cấu hình"),
     POLICY_STATE_REPORTED("Đã báo cáo trạng thái chính sách"),
     LAUNCHER_READY("Launcher sẵn sàng"),
-    KIOSK_READY("Kiosk sẵn sàng"),
+    KIOSK_READY("Chế độ kiosk sẵn sàng"),
     READY_TO_REBOOT("Sẵn sàng khởi động lại")
 }
 

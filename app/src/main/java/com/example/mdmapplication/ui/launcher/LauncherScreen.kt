@@ -48,9 +48,9 @@ import com.example.mdmapplication.BuildConfig
 import com.example.mdmapplication.model.LauncherApp
 import com.google.accompanist.drawablepainter.rememberDrawablePainter
 
-private val LauncherBgTop = Color(0x6607101C)
-private val LauncherBgMid = Color(0x990A1424)
-private val LauncherBgBottom = Color(0xCC050A12)
+private val LauncherBgTop = Color(0xFF07101C)
+private val LauncherBgMid = Color(0xFF0A1424)
+private val LauncherBgBottom = Color(0xFF050A12)
 private val LauncherGlass = Color(0xAA121C2B)
 private val LauncherCard = Color(0xB0142031)
 private val LauncherBorder = Color.White.copy(alpha = 0.12f)

@@ -38,8 +38,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-private val UnlockBgTop = Color(0xCC300A13)
-private val UnlockBgBottom = Color(0xDD070B12)
+private val UnlockBgTop = Color(0xFF300A13)
+private val UnlockBgBottom = Color(0xFF070B12)
 private val UnlockGlass = Color(0xB3151C28)
 private val UnlockBorder = Color.White.copy(alpha = 0.12f)
 private val UnlockText = Color(0xFFF2F7FF)
@@ -103,7 +103,7 @@ fun UnlockScreen(
                 .matchParentSize()
                 .background(
                     Brush.verticalGradient(
-                        listOf(UnlockBgTop, Color(0xAA101827), UnlockBgBottom)
+                        listOf(UnlockBgTop, Color(0xFF101827), UnlockBgBottom)
                     )
                 )
         )

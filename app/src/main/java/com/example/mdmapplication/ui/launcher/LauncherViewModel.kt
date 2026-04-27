@@ -63,12 +63,18 @@ data class LauncherUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val lockState: DeviceLockState = DeviceLockState.UNKNOWN,
+    val setupState: SetupState = SetupState.NOT_PROVISIONED,
+    val setupSteps: List<ProvisioningStep> = defaultProvisioningSteps(),
+    val isDeviceOwner: Boolean = false,
+    val rebootError: String? = null,
+    val rebootRequested: Boolean = false,
     val noProfileLocked: Boolean = false,
     val lockReason: String? = null,
     val unlockError: String? = null,
     val unlockSubmitting: Boolean = false,
     val lockContainmentStatus: String? = null,
     val lockContainmentErrorCode: String? = null,
+    val applyingConfiguration: Boolean = false,
     val config: DeviceConfigResponse? = null,
     val apps: List<LauncherApp> = emptyList()
 )
@@ -121,11 +127,184 @@ class LauncherViewModel : ViewModel() {
     private val configLoadMutex = Mutex()
     private val commandPollMutex = Mutex()
     private val runtimeWakeMutex = Mutex()
+    private val policyApplyMutex = Mutex()
     private var refreshAttemptSeq: Long = 0
     private var lastRuntimeWakeAtMs: Long = 0L
     private var runtimeWakeInFlight: Boolean = false
     private val supportedCommandTypes = setOf("lock_screen", "refresh_config", "sync_config")
     private val runtimeWakeDebounceMs = 2_000L
+
+    private val setupPrefsName = "mdm_setup_state"
+    private val policyApplyPrefsName = "mdm_policy_apply_state"
+    private val keyProvisioningRebootRecommended = "provisioning_reboot_recommended"
+    private val keyEnforcementAllowedAfterReboot = "enforcement_allowed_after_reboot"
+    private val keyLastAppliedConfigVersion = "last_applied_config_version"
+    private val keyLastAppliedConfigHash = "last_applied_config_hash"
+
+    private fun setupPrefs(context: Context) =
+        context.getSharedPreferences(setupPrefsName, Context.MODE_PRIVATE)
+
+    private fun policyApplyPrefs(context: Context) =
+        context.getSharedPreferences(policyApplyPrefsName, Context.MODE_PRIVATE)
+
+    private fun isProvisioningRebootRecommended(context: Context): Boolean =
+        setupPrefs(context).getBoolean(keyProvisioningRebootRecommended, false)
+
+    private fun setProvisioningRebootRecommended(context: Context, value: Boolean) {
+        setupPrefs(context).edit().putBoolean(keyProvisioningRebootRecommended, value).apply()
+    }
+
+    private fun isEnforcementAllowed(context: Context): Boolean =
+        setupPrefs(context).getBoolean(keyEnforcementAllowedAfterReboot, false)
+
+    private fun setEnforcementAllowed(context: Context, value: Boolean) {
+        setupPrefs(context).edit().putBoolean(keyEnforcementAllowedAfterReboot, value).apply()
+    }
+
+    private fun buildProvisioningSteps(
+        passed: Set<ProvisioningStepKey>,
+        running: ProvisioningStepKey? = null,
+        failed: Pair<ProvisioningStepKey, String?>? = null,
+        manual: Pair<ProvisioningStepKey, String?>? = null
+    ): List<ProvisioningStep> {
+        return ProvisioningStepKey.values().map { key ->
+            val status = when {
+                failed?.first == key -> ProvisioningStepStatus.FAILED
+                manual?.first == key -> ProvisioningStepStatus.MANUAL_REQUIRED
+                running == key -> ProvisioningStepStatus.RUNNING
+                key in passed -> ProvisioningStepStatus.PASSED
+                else -> ProvisioningStepStatus.PENDING
+            }
+            val detail = when {
+                failed?.first == key -> failed.second
+                manual?.first == key -> manual.second
+                else -> null
+            }
+            ProvisioningStep(key = key, status = status, detail = detail)
+        }
+    }
+
+    private fun setProvisioningProgress(
+        context: Context,
+        setupState: SetupState,
+        passed: Set<ProvisioningStepKey>,
+        running: ProvisioningStepKey? = null,
+        failed: Pair<ProvisioningStepKey, String?>? = null,
+        manual: Pair<ProvisioningStepKey, String?>? = null,
+        loading: Boolean = _state.value.loading,
+        error: String? = _state.value.error
+    ) {
+        val previousSetupState = _state.value.setupState
+        val isOwner = DevicePolicyHelper(context).isDeviceOwner()
+        _state.value = _state.value.copy(
+            setupState = setupState,
+            setupSteps = buildProvisioningSteps(
+                passed = passed + ProvisioningStepKey.APP_INSTALLED,
+                running = running,
+                failed = failed,
+                manual = manual
+            ),
+            isDeviceOwner = isOwner,
+            loading = loading,
+            error = error
+        )
+        if (previousSetupState != setupState) {
+            Log.i(tag, "setup state transition $previousSetupState -> $setupState")
+        }
+    }
+
+    private fun showDeviceOwnerManualRequired(context: Context) {
+        stopAllRuntimeLoops()
+        setProvisioningProgress(
+            context = context,
+            setupState = SetupState.NOT_PROVISIONED,
+            passed = setOf(ProvisioningStepKey.APP_INSTALLED),
+            manual = ProvisioningStepKey.DEVICE_OWNER_ACTIVE to
+                    "Run the host provisioning script after installing on a clean emulator/device.",
+            loading = false,
+            error = null
+        )
+    }
+
+    private fun showRebootRecommended(context: Context) {
+        val allPassed = ProvisioningStepKey.values().toSet()
+        setProvisioningProgress(
+            context = context,
+            setupState = SetupState.REBOOT_RECOMMENDED,
+            passed = allPassed,
+            loading = false,
+            error = null
+        )
+    }
+
+    private fun applyProvisioningGate(context: Context): Boolean {
+        val policy = DevicePolicyHelper(context)
+        val isOwner = policy.isDeviceOwner()
+        if (!isOwner) {
+            setEnforcementAllowed(context, false)
+            showDeviceOwnerManualRequired(context)
+            return false
+        }
+
+        if (isProvisioningRebootRecommended(context) && !isEnforcementAllowed(context)) {
+            showRebootRecommended(context)
+            return false
+        }
+
+        val setupState = if (isEnforcementAllowed(context)) {
+            SetupState.ENFORCEMENT_ACTIVE
+        } else {
+            SetupState.DEVICE_OWNER_READY
+        }
+        setProvisioningProgress(
+            context = context,
+            setupState = setupState,
+            passed = setOf(
+                ProvisioningStepKey.APP_INSTALLED,
+                ProvisioningStepKey.DEVICE_OWNER_ACTIVE
+            ),
+            loading = _state.value.loading,
+            error = null
+        )
+        return true
+    }
+
+    fun rebootAfterProvisioning(context: Context) {
+        viewModelScope.launch {
+            if (_state.value.setupState != SetupState.REBOOT_RECOMMENDED) return@launch
+            _state.value = _state.value.copy(rebootRequested = true, rebootError = null)
+            setEnforcementAllowed(context, true)
+            val outcome = DevicePolicyHelper(context).rebootIfDeviceOwner()
+            if (!outcome.success) {
+                setEnforcementAllowed(context, false)
+                _state.value = _state.value.copy(
+                    rebootRequested = false,
+                    rebootError = outcome.error ?: "Device Owner reboot failed"
+                )
+            }
+        }
+    }
+
+    private fun isPolicyAlreadyApplied(context: Context, version: Long, hash: String?): Boolean {
+        if (hash.isNullOrBlank()) return false
+        val prefs = policyApplyPrefs(context)
+        return prefs.getLong(keyLastAppliedConfigVersion, Long.MIN_VALUE) == version &&
+                prefs.getString(keyLastAppliedConfigHash, null) == hash
+    }
+
+    private fun recordPolicyApplied(context: Context, version: Long, hash: String?) {
+        if (hash.isNullOrBlank()) return
+        policyApplyPrefs(context).edit()
+            .putLong(keyLastAppliedConfigVersion, version)
+            .putString(keyLastAppliedConfigHash, hash)
+            .apply()
+    }
+
+    private fun stopAllRuntimeLoops() {
+        stopTelemetryLoops()
+        commandPollJob?.cancel()
+        commandPollJob = null
+    }
 
     fun refreshFromBackend(context: Context) {
         requestRuntimeWake(context = context, reason = "manual_refresh", force = true)
@@ -133,6 +312,8 @@ class LauncherViewModel : ViewModel() {
 
     fun requestRuntimeWake(context: Context, reason: String, force: Boolean = false) {
         viewModelScope.launch {
+            if (!applyProvisioningGate(context)) return@launch
+
             val now = System.currentTimeMillis()
             val shouldRun = runtimeWakeMutex.withLock {
                 if (runtimeWakeInFlight) {
@@ -176,16 +357,59 @@ class LauncherViewModel : ViewModel() {
                 tag,
                 "refresh start refreshId=$refreshId trigger=$triggerReason deviceCode=$deviceCode"
             )
-            _state.value = _state.value.copy(loading = true, error = null, unlockError = null)
+            _state.value = _state.value.copy(error = null, unlockError = null)
+            val provisioningMode = !isEnforcementAllowed(context)
+            if (provisioningMode) {
+                setProvisioningProgress(
+                    context = context,
+                    setupState = SetupState.DEVICE_OWNER_READY,
+                    passed = setOf(
+                        ProvisioningStepKey.APP_INSTALLED,
+                        ProvisioningStepKey.DEVICE_OWNER_ACTIVE
+                    ),
+                    running = ProvisioningStepKey.BACKEND_REACHABLE,
+                    loading = true,
+                    error = null
+                )
+            }
 
             try {
                 val token = getOrRefreshToken(deviceCode)
+                if (provisioningMode) {
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = SetupState.BACKEND_CONNECTED,
+                        passed = setOf(
+                            ProvisioningStepKey.APP_INSTALLED,
+                            ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                            ProvisioningStepKey.BACKEND_REACHABLE
+                        ),
+                        running = ProvisioningStepKey.DEVICE_REGISTERED,
+                        loading = true,
+                        error = null
+                    )
+                }
 
                 val registerResp = api.registerDevice(
                     token = token,
                     req = buildRegisterRequest(context, deviceCode)
                 )
                 Log.i(tag, "register result refreshId=$refreshId status=${registerResp.status}")
+                if (provisioningMode) {
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = SetupState.DEVICE_REGISTERED,
+                        passed = setOf(
+                            ProvisioningStepKey.APP_INSTALLED,
+                            ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                            ProvisioningStepKey.BACKEND_REACHABLE,
+                            ProvisioningStepKey.DEVICE_REGISTERED
+                        ),
+                        running = ProvisioningStepKey.PROFILE_LINKED,
+                        loading = true,
+                        error = null
+                    )
+                }
                 runCatching { syncPendingFcmToken(context = context, api = api, authToken = token, deviceCode = deviceCode) }
                     .onFailure { syncErr ->
                         Log.w(tag, "fcm token sync skipped refreshId=$refreshId deviceCode=$deviceCode", syncErr)
@@ -215,6 +439,36 @@ class LauncherViewModel : ViewModel() {
                             "MDM_PROFILE_STATE",
                             "profile mapped source=register status=${registerResp.status} linked=${!mappedNoProfile} noProfileMapped=$mappedNoProfile"
                         )
+                        if (provisioningMode) {
+                            stopAllRuntimeLoops()
+                            setProvisioningProgress(
+                                context = context,
+                                setupState = SetupState.PROFILE_WAITING,
+                                passed = setOf(
+                                    ProvisioningStepKey.APP_INSTALLED,
+                                    ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                                    ProvisioningStepKey.BACKEND_REACHABLE,
+                                    ProvisioningStepKey.DEVICE_REGISTERED
+                                ),
+                                manual = ProvisioningStepKey.PROFILE_LINKED to
+                                        "Backend returned LOCKED before setup completed. Finish profile/link state in backend, then retry.",
+                                loading = false,
+                                error = null
+                            )
+                            _state.value = _state.value.copy(
+                                lockState = DeviceLockState.UNKNOWN,
+                                noProfileLocked = mappedNoProfile,
+                                lockReason = null,
+                                lockContainmentStatus = null,
+                                lockContainmentErrorCode = null,
+                                config = null,
+                                apps = emptyList(),
+                                applyingConfiguration = false,
+                                unlockError = null,
+                                unlockSubmitting = false
+                            )
+                            return
+                        }
                         stopTelemetryLoops()
                         _state.value = _state.value.copy(
                             loading = false,
@@ -238,6 +492,22 @@ class LauncherViewModel : ViewModel() {
 
                     "ACTIVE" -> {
                         Log.i("MDM_PROFILE_STATE", "profile mapped source=register status=ACTIVE linked=true noProfileMapped=false")
+                        if (provisioningMode) {
+                            setProvisioningProgress(
+                                context = context,
+                                setupState = SetupState.DEVICE_REGISTERED,
+                                passed = setOf(
+                                    ProvisioningStepKey.APP_INSTALLED,
+                                    ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                                    ProvisioningStepKey.BACKEND_REACHABLE,
+                                    ProvisioningStepKey.DEVICE_REGISTERED,
+                                    ProvisioningStepKey.PROFILE_LINKED
+                                ),
+                                running = ProvisioningStepKey.CONFIG_FETCHED,
+                                loading = true,
+                                error = null
+                            )
+                        }
                         Log.i(tag, "refresh ACTIVE refreshId=$refreshId -> loadConfig")
                         loadConfig(context, source = "refresh")
                     }
@@ -247,6 +517,36 @@ class LauncherViewModel : ViewModel() {
                             "MDM_PROFILE_STATE",
                             "profile mapped source=register status=${registerResp.status} linked=false noProfileMapped=true"
                         )
+                        if (provisioningMode) {
+                            stopAllRuntimeLoops()
+                            setProvisioningProgress(
+                                context = context,
+                                setupState = SetupState.PROFILE_WAITING,
+                                passed = setOf(
+                                    ProvisioningStepKey.APP_INSTALLED,
+                                    ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                                    ProvisioningStepKey.BACKEND_REACHABLE,
+                                    ProvisioningStepKey.DEVICE_REGISTERED
+                                ),
+                                manual = ProvisioningStepKey.PROFILE_LINKED to
+                                        "Assign a backend profile to this device, then retry provisioning.",
+                                loading = false,
+                                error = null
+                            )
+                            _state.value = _state.value.copy(
+                                lockState = DeviceLockState.UNKNOWN,
+                                noProfileLocked = true,
+                                lockReason = null,
+                                lockContainmentStatus = null,
+                                lockContainmentErrorCode = null,
+                                config = null,
+                                apps = emptyList(),
+                                applyingConfiguration = false,
+                                unlockError = null,
+                                unlockSubmitting = false
+                            )
+                            return
+                        }
                         stopTelemetryLoops()
                         _state.value = _state.value.copy(
                             loading = false,
@@ -268,6 +568,23 @@ class LauncherViewModel : ViewModel() {
                     }
 
                     else -> {
+                        if (provisioningMode) {
+                            setProvisioningProgress(
+                                context = context,
+                                setupState = SetupState.DEVICE_REGISTERED,
+                                passed = setOf(
+                                    ProvisioningStepKey.APP_INSTALLED,
+                                    ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                                    ProvisioningStepKey.BACKEND_REACHABLE,
+                                    ProvisioningStepKey.DEVICE_REGISTERED
+                                ),
+                                failed = ProvisioningStepKey.PROFILE_LINKED to
+                                        "Unknown backend status: ${registerResp.status}",
+                                loading = false,
+                                error = "Trạng thái không xác định: ${registerResp.status}"
+                            )
+                            return
+                        }
                         _state.value = _state.value.copy(
                             loading = false,
                             error = "Trạng thái không xác định: ${registerResp.status}"
@@ -275,20 +592,58 @@ class LauncherViewModel : ViewModel() {
                     }
                 }
 
-                maybeFastPollAfterRuntimeWake(
-                    context = context,
-                    deviceCode = deviceCode,
-                    triggerReason = triggerReason,
-                )
+                if (isEnforcementAllowed(context)) {
+                    maybeFastPollAfterRuntimeWake(
+                        context = context,
+                        deviceCode = deviceCode,
+                        triggerReason = triggerReason,
+                    )
+                }
             } catch (e: MdmApi.ApiException) {
                 Log.e(
                     tag,
                     "refresh api failure refreshId=$refreshId trigger=$triggerReason code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
                     e
                 )
+                if (!isEnforcementAllowed(context)) {
+                    val runningStep = _state.value.setupSteps
+                        .firstOrNull { it.status == ProvisioningStepStatus.RUNNING }
+                        ?.key ?: ProvisioningStepKey.BACKEND_REACHABLE
+                    val passedSteps = _state.value.setupSteps
+                        .filter { it.status == ProvisioningStepStatus.PASSED }
+                        .map { it.key }
+                        .toSet()
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = _state.value.setupState,
+                        passed = passedSteps,
+                        failed = runningStep to e.message,
+                        loading = false,
+                        error = e.message
+                    )
+                    return
+                }
                 handleApiException(e, duringConfig = false, context = context)
             } catch (t: Throwable) {
                 Log.e(tag, "refresh failure refreshId=$refreshId trigger=$triggerReason", t)
+                if (!isEnforcementAllowed(context)) {
+                    val runningStep = _state.value.setupSteps
+                        .firstOrNull { it.status == ProvisioningStepStatus.RUNNING }
+                        ?.key ?: ProvisioningStepKey.BACKEND_REACHABLE
+                    val passedSteps = _state.value.setupSteps
+                        .filter { it.status == ProvisioningStepStatus.PASSED }
+                        .map { it.key }
+                        .toSet()
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = _state.value.setupState,
+                        passed = passedSteps,
+                        failed = runningStep to (t.message ?: "Provisioning failed"),
+                        loading = false,
+                        error = t.message ?: "Lỗi kết nối"
+                    )
+                    return
+                }
                 _state.value = _state.value.copy(
                     loading = false,
                     error = t.message ?: "Lỗi kết nối"
@@ -453,7 +808,7 @@ class LauncherViewModel : ViewModel() {
 
         _state.value = _state.value.copy(apps = rebuilt)
 
-        if (oldPackages != newPackages) {
+        if (oldPackages != newPackages && _state.value.setupState == SetupState.ENFORCEMENT_ACTIVE) {
             _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
         }
     }
@@ -505,7 +860,10 @@ class LauncherViewModel : ViewModel() {
     private suspend fun loadConfig(context: Context, source: String): ConfigLoadResult {
         return configLoadMutex.withLock {
             val deviceCode = resolveCurrentDeviceCode(context, reason = "loadConfig")
+            val provisioningMode = !isEnforcementAllowed(context)
             Log.i(tag, "loadConfig enter source=$source deviceCode=$deviceCode")
+            _state.value = _state.value.copy(applyingConfiguration = true, error = null)
+            Log.i(configFetchTag, "config apply ui overlay shown source=$source setupState=${_state.value.setupState}")
             try {
                 val token = getOrRefreshToken(deviceCode)
                 val previousConfig = _state.value.config
@@ -516,6 +874,23 @@ class LauncherViewModel : ViewModel() {
                     configFetchTag,
                     "fetch config success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
                 )
+                if (provisioningMode) {
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = SetupState.CONFIG_FETCHED,
+                        passed = setOf(
+                            ProvisioningStepKey.APP_INSTALLED,
+                            ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                            ProvisioningStepKey.BACKEND_REACHABLE,
+                            ProvisioningStepKey.DEVICE_REGISTERED,
+                            ProvisioningStepKey.PROFILE_LINKED,
+                            ProvisioningStepKey.CONFIG_FETCHED
+                        ),
+                        running = ProvisioningStepKey.POLICY_STATE_REPORTED,
+                        loading = true,
+                        error = null
+                    )
+                }
                 val appliedConfigHash = buildAppliedConfigHashOrNull(config)
 
                 val policyResult = applyPolicyAndReport(
@@ -532,28 +907,44 @@ class LauncherViewModel : ViewModel() {
                         previousConfig?.configVersionEpochMillis != config.configVersionEpochMillis
 
                 val shouldStayLocked = shouldStayLockedOnConfigUpdate(_state.value.lockState, source)
+                val enforcementAllowedNow = isEnforcementAllowed(context)
+                val currentSetupState = _state.value.setupState
 
                 _state.value = _state.value.copy(
                     loading = false,
-                    lockState = if (shouldStayLocked) DeviceLockState.LOCKED else DeviceLockState.ACTIVE,
+                    lockState = if (enforcementAllowedNow) {
+                        if (shouldStayLocked) DeviceLockState.LOCKED else DeviceLockState.ACTIVE
+                    } else {
+                        DeviceLockState.UNKNOWN
+                    },
+                    setupState = if (enforcementAllowedNow) {
+                        SetupState.ENFORCEMENT_ACTIVE
+                    } else {
+                        currentSetupState
+                    },
                     noProfileLocked = false,
                     lockReason = null,
-                    lockContainmentStatus = if (shouldStayLocked) "PENDING" else null,
+                    lockContainmentStatus = if (enforcementAllowedNow && shouldStayLocked) "PENDING" else null,
                     lockContainmentErrorCode = null,
                     config = config,
                     apps = apps,
                     error = null,
+                    applyingConfiguration = false,
                     unlockError = null
                 )
 
-                if (changed) {
+                if (changed && enforcementAllowedNow) {
                     _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
                 }
 
-                startLocationLoop(context)
-                startUsageBatchLoop(context)
-                startCommandPollLoop(context)
-                startStateSnapshotLoop(context)
+                if (enforcementAllowedNow) {
+                    startLocationLoop(context)
+                    startUsageBatchLoop(context)
+                    startCommandPollLoop(context)
+                    startStateSnapshotLoop(context)
+                } else {
+                    stopAllRuntimeLoops()
+                }
                 runCatching { reportStateSnapshotNow(context, deviceCode, token) }
                 runCatching { reportAppInventoryNow(context, deviceCode, token) }
                 Log.i(
@@ -586,6 +977,25 @@ class LauncherViewModel : ViewModel() {
                     "loadConfig api failure source=$source deviceCode=$deviceCode code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
                     e
                 )
+                if (provisioningMode) {
+                    val passedSteps = _state.value.setupSteps
+                        .filter { it.status == ProvisioningStepStatus.PASSED }
+                        .map { it.key }
+                        .toSet()
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = _state.value.setupState,
+                        passed = passedSteps,
+                        failed = ProvisioningStepKey.CONFIG_FETCHED to e.message,
+                        loading = false,
+                        error = e.message
+                    )
+                    return@withLock ConfigLoadResult(
+                        success = false,
+                        error = e.message,
+                        errorCode = normalizeConfigErrorCode(e)
+                    )
+                }
                 handleApiException(e, duringConfig = true, context = context)
                 ConfigLoadResult(
                     success = false,
@@ -594,8 +1004,28 @@ class LauncherViewModel : ViewModel() {
                 )
             } catch (t: Throwable) {
                 Log.e(tag, "loadConfig failure source=$source deviceCode=$deviceCode", t)
+                if (provisioningMode) {
+                    val passedSteps = _state.value.setupSteps
+                        .filter { it.status == ProvisioningStepStatus.PASSED }
+                        .map { it.key }
+                        .toSet()
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = _state.value.setupState,
+                        passed = passedSteps,
+                        failed = ProvisioningStepKey.CONFIG_FETCHED to (t.message ?: "Load config failed"),
+                        loading = false,
+                        error = t.message ?: "Load config thất bại"
+                    )
+                    return@withLock ConfigLoadResult(
+                        success = false,
+                        error = t.message ?: "Load config thất bại",
+                        errorCode = "CONFIG_SYNC_FAILED"
+                    )
+                }
                 _state.value = _state.value.copy(
                     loading = false,
+                    applyingConfiguration = false,
                     error = t.message ?: "Load config thất bại"
                 )
                 ConfigLoadResult(
@@ -604,6 +1034,9 @@ class LauncherViewModel : ViewModel() {
                     errorCode = "CONFIG_SYNC_FAILED"
                 )
             } finally {
+                if (_state.value.applyingConfiguration) {
+                    _state.value = _state.value.copy(applyingConfiguration = false)
+                }
                 Log.i(tag, "loadConfig exit source=$source deviceCode=$deviceCode")
             }
         }
@@ -616,88 +1049,13 @@ class LauncherViewModel : ViewModel() {
         config: DeviceConfigResponse,
         appliedConfigHash: String?
     ): PolicyApplyResult {
-        val policy = DevicePolicyHelper(context)
-        val policyReportedAt = System.currentTimeMillis()
-        Log.i(policyApplyTag, "apply policy start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
+        return policyApplyMutex.withLock {
+            val policy = DevicePolicyHelper(context)
+            val policyReportedAt = System.currentTimeMillis()
+            Log.i(policyApplyTag, "apply policy start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
 
-        if (!policy.isDeviceOwner()) {
-            Log.w(policyApplyTag, "apply policy skipped deviceCode=$deviceCode ownerCheck=false")
-            reportPolicyStateNow(
-                token = token,
-                req = DevicePolicyStateReportRequest(
-                    deviceCode = deviceCode,
-                    desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
-                    desiredConfigHash = appliedConfigHash,
-                    policyApplyStatus = "FAILED",
-                    policyApplyError = "Device is not owner, policy cannot be applied",
-                    policyApplyErrorCode = "POLICY_NOT_DEVICE_OWNER",
-                    policyAppliedAtEpochMillis = policyReportedAt
-                )
-            )
-            return PolicyApplyResult(
-                success = false,
-                policyStatus = "FAILED",
-                error = "Device is not owner, policy cannot be applied",
-                errorCode = "POLICY_NOT_DEVICE_OWNER"
-            )
-        }
-
-        try {
-            Log.i(tag, "applyFromServerConfig enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
-            val applyOutcome = policy.applyFromServerConfig(
-                launcherPackage = context.packageName,
-                allowedApps = config.allowedApps,
-                kioskMode = config.kioskMode,
-                disableStatusBar = config.disableStatusBar,
-                blockUninstall = config.blockUninstall,
-                disableWifi = config.disableWifi,
-                disableBluetooth = config.disableBluetooth,
-                disableCamera = config.disableCamera,
-                lockPrivateDnsConfig = config.lockPrivateDnsConfig,
-                lockVpnConfig = config.lockVpnConfig,
-                blockDebuggingFeatures = config.blockDebuggingFeatures,
-                disableUsbDataSignaling = config.disableUsbDataSignaling,
-                disallowSafeBoot = config.disallowSafeBoot,
-                disallowFactoryReset = config.disallowFactoryReset
-            )
-            Log.i(tag, "enforceAllowedPackages enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
-            policy.enforceAllowedPackages(
-                launcherPackage = context.packageName,
-                allowedApps = config.allowedApps,
-                kioskMode = config.kioskMode,
-                allowSettingsIfExplicitlyWhitelisted = true
-            )
-
-            reportPolicyStateNow(
-                token = token,
-                req = DevicePolicyStateReportRequest(
-                    deviceCode = deviceCode,
-                    desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
-                    desiredConfigHash = appliedConfigHash,
-                    appliedConfigVersionEpochMillis = if (applyOutcome.status == "SUCCESS") config.configVersionEpochMillis else null,
-                    appliedConfigHash = if (applyOutcome.status == "SUCCESS") appliedConfigHash else null,
-                    policyApplyStatus = applyOutcome.status,
-                    policyApplyError = applyOutcome.error,
-                    policyApplyErrorCode = applyOutcome.errorCode,
-                    policyAppliedAtEpochMillis = policyReportedAt
-                )
-            )
-            Log.i(
-                policyApplyTag,
-                "apply policy done deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} status=${applyOutcome.status} errorCode=${applyOutcome.errorCode}"
-            )
-            return PolicyApplyResult(
-                success = applyOutcome.status == "SUCCESS",
-                policyStatus = applyOutcome.status,
-                error = applyOutcome.error,
-                errorCode = applyOutcome.errorCode
-            )
-        } catch (applyErr: Throwable) {
-            Log.w(
-                policyApplyTag,
-                "apply policy failed deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} errorCode=POLICY_APPLY_FAILED message=${applyErr.message}"
-            )
-            runCatching {
+            if (!policy.isDeviceOwner()) {
+                Log.w(policyApplyTag, "apply policy skipped deviceCode=$deviceCode ownerCheck=false")
                 reportPolicyStateNow(
                     token = token,
                     req = DevicePolicyStateReportRequest(
@@ -705,17 +1063,309 @@ class LauncherViewModel : ViewModel() {
                         desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
                         desiredConfigHash = appliedConfigHash,
                         policyApplyStatus = "FAILED",
-                        policyApplyError = applyErr.message ?: "Policy apply failed",
-                        policyApplyErrorCode = "POLICY_APPLY_FAILED",
+                        policyApplyError = "Device is not owner, policy cannot be applied",
+                        policyApplyErrorCode = "POLICY_NOT_DEVICE_OWNER",
+                        policyAppliedAtEpochMillis = policyReportedAt
+                    )
+                )
+                return@withLock PolicyApplyResult(
+                    success = false,
+                    policyStatus = "FAILED",
+                    error = "Device is not owner, policy cannot be applied",
+                    errorCode = "POLICY_NOT_DEVICE_OWNER"
+                )
+            }
+
+            if (!isEnforcementAllowed(context)) {
+                return@withLock prepareProvisioningReadinessAndReport(
+                    context = context,
+                    deviceCode = deviceCode,
+                    token = token,
+                    config = config,
+                    desiredConfigHash = appliedConfigHash,
+                    policy = policy
+                )
+            }
+
+            if (isPolicyAlreadyApplied(context, config.configVersionEpochMillis, appliedConfigHash)) {
+                Log.i(
+                    policyApplyTag,
+                    "apply policy skipped unchanged deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+                )
+                reportPolicyStateNow(
+                    token = token,
+                    req = DevicePolicyStateReportRequest(
+                        deviceCode = deviceCode,
+                        desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                        desiredConfigHash = appliedConfigHash,
+                        appliedConfigVersionEpochMillis = config.configVersionEpochMillis,
+                        appliedConfigHash = appliedConfigHash,
+                        policyApplyStatus = "SUCCESS",
+                        policyAppliedAtEpochMillis = policyReportedAt
+                    )
+                )
+                return@withLock PolicyApplyResult(
+                    success = true,
+                    policyStatus = "SUCCESS"
+                )
+            }
+
+            try {
+                Log.i(tag, "applyFromServerConfig enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
+                val applyOutcome = policy.applyFromServerConfig(
+                    launcherPackage = context.packageName,
+                    allowedApps = config.allowedApps,
+                    kioskMode = config.kioskMode,
+                    disableStatusBar = config.disableStatusBar,
+                    blockUninstall = config.blockUninstall,
+                    disableWifi = config.disableWifi,
+                    disableBluetooth = config.disableBluetooth,
+                    disableCamera = config.disableCamera,
+                    lockPrivateDnsConfig = config.lockPrivateDnsConfig,
+                    lockVpnConfig = config.lockVpnConfig,
+                    blockDebuggingFeatures = config.blockDebuggingFeatures,
+                    disableUsbDataSignaling = config.disableUsbDataSignaling,
+                    disallowSafeBoot = config.disallowSafeBoot,
+                    disallowFactoryReset = config.disallowFactoryReset
+                )
+                Log.i(tag, "enforceAllowedPackages enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
+                policy.enforceAllowedPackages(
+                    launcherPackage = context.packageName,
+                    allowedApps = config.allowedApps,
+                    kioskMode = config.kioskMode,
+                    allowSettingsIfExplicitlyWhitelisted = true
+                )
+
+                reportPolicyStateNow(
+                    token = token,
+                    req = DevicePolicyStateReportRequest(
+                        deviceCode = deviceCode,
+                        desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                        desiredConfigHash = appliedConfigHash,
+                        appliedConfigVersionEpochMillis = if (applyOutcome.status == "SUCCESS") config.configVersionEpochMillis else null,
+                        appliedConfigHash = if (applyOutcome.status == "SUCCESS") appliedConfigHash else null,
+                        policyApplyStatus = applyOutcome.status,
+                        policyApplyError = applyOutcome.error,
+                        policyApplyErrorCode = applyOutcome.errorCode,
+                        policyAppliedAtEpochMillis = policyReportedAt
+                    )
+                )
+                if (applyOutcome.status == "SUCCESS") {
+                    recordPolicyApplied(context, config.configVersionEpochMillis, appliedConfigHash)
+                }
+                Log.i(
+                    policyApplyTag,
+                    "apply policy done deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} status=${applyOutcome.status} errorCode=${applyOutcome.errorCode}"
+                )
+                return@withLock PolicyApplyResult(
+                    success = applyOutcome.status == "SUCCESS",
+                    policyStatus = applyOutcome.status,
+                    error = applyOutcome.error,
+                    errorCode = applyOutcome.errorCode
+                )
+            } catch (applyErr: Throwable) {
+                Log.w(
+                    policyApplyTag,
+                    "apply policy failed deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} errorCode=POLICY_APPLY_FAILED message=${applyErr.message}"
+                )
+                runCatching {
+                    reportPolicyStateNow(
+                        token = token,
+                        req = DevicePolicyStateReportRequest(
+                            deviceCode = deviceCode,
+                            desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                            desiredConfigHash = appliedConfigHash,
+                            policyApplyStatus = "FAILED",
+                            policyApplyError = applyErr.message ?: "Policy apply failed",
+                            policyApplyErrorCode = "POLICY_APPLY_FAILED",
+                            policyAppliedAtEpochMillis = policyReportedAt
+                        )
+                    )
+                }
+                return@withLock PolicyApplyResult(
+                    success = false,
+                    policyStatus = "FAILED",
+                    error = applyErr.message ?: "Policy apply failed",
+                    errorCode = "POLICY_APPLY_FAILED"
+                )
+            }
+        }
+    }
+
+    private suspend fun prepareProvisioningReadinessAndReport(
+        context: Context,
+        deviceCode: String,
+        token: String,
+        config: DeviceConfigResponse,
+        desiredConfigHash: String?,
+        policy: DevicePolicyHelper
+    ): PolicyApplyResult {
+        val policyReportedAt = System.currentTimeMillis()
+        return try {
+            Log.i(
+                policyApplyTag,
+                "provisioning readiness start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+            )
+            if (isPolicyAlreadyApplied(context, config.configVersionEpochMillis, desiredConfigHash)) {
+                Log.i(
+                    policyApplyTag,
+                    "provisioning readiness skipped unchanged deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+                )
+                reportPolicyStateNow(
+                    token = token,
+                    req = DevicePolicyStateReportRequest(
+                        deviceCode = deviceCode,
+                        desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                        desiredConfigHash = desiredConfigHash,
+                        policyApplyStatus = "PARTIAL",
+                        policyApplyError = "Provisioning readiness already prepared; reboot required before full enforcement",
+                        policyApplyErrorCode = "PROVISIONING_REBOOT_RECOMMENDED",
+                        policyAppliedAtEpochMillis = policyReportedAt
+                    )
+                )
+                showRebootRecommended(context)
+                return PolicyApplyResult(
+                    success = true,
+                    policyStatus = "PARTIAL",
+                    error = "Provisioning readiness already prepared; reboot required before full enforcement",
+                    errorCode = "PROVISIONING_REBOOT_RECOMMENDED"
+                )
+            }
+            policy.setPersistentHomeToLauncher()
+            policy.setLockTaskPackages(
+                (listOf(context.packageName) + config.allowedApps)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .toTypedArray()
+            )
+
+            val launcherReady = policy.isDefaultLauncher()
+            val kioskReady = policy.isLockTaskPermitted()
+
+            reportPolicyStateNow(
+                token = token,
+                req = DevicePolicyStateReportRequest(
+                    deviceCode = deviceCode,
+                    desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                    desiredConfigHash = desiredConfigHash,
+                    policyApplyStatus = "PARTIAL",
+                    policyApplyError = "Provisioning readiness prepared; reboot required before full enforcement",
+                    policyApplyErrorCode = "PROVISIONING_REBOOT_RECOMMENDED",
+                    policyAppliedAtEpochMillis = policyReportedAt
+                )
+            )
+
+            val passed = mutableSetOf(
+                ProvisioningStepKey.APP_INSTALLED,
+                ProvisioningStepKey.DEVICE_OWNER_ACTIVE,
+                ProvisioningStepKey.BACKEND_REACHABLE,
+                ProvisioningStepKey.DEVICE_REGISTERED,
+                ProvisioningStepKey.PROFILE_LINKED,
+                ProvisioningStepKey.CONFIG_FETCHED,
+                ProvisioningStepKey.POLICY_STATE_REPORTED
+            )
+            if (launcherReady) passed += ProvisioningStepKey.LAUNCHER_READY
+            if (kioskReady) passed += ProvisioningStepKey.KIOSK_READY
+
+            when {
+                !launcherReady -> {
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = SetupState.POLICY_REPORTED,
+                        passed = passed,
+                        failed = ProvisioningStepKey.LAUNCHER_READY to
+                                "Persistent HOME is not resolved to this app yet.",
+                        loading = false,
+                        error = "Launcher readiness failed"
+                    )
+                    PolicyApplyResult(
+                        success = false,
+                        policyStatus = "PARTIAL",
+                        error = "Launcher readiness failed",
+                        errorCode = "LAUNCHER_NOT_DEFAULT"
+                    )
+                }
+
+                !kioskReady -> {
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = SetupState.ENFORCEMENT_READY,
+                        passed = passed,
+                        failed = ProvisioningStepKey.KIOSK_READY to
+                                "Lock task is not permitted for the MDM launcher package.",
+                        loading = false,
+                        error = "Kiosk readiness failed"
+                    )
+                    PolicyApplyResult(
+                        success = false,
+                        policyStatus = "PARTIAL",
+                        error = "Kiosk readiness failed",
+                        errorCode = "LOCK_TASK_NOT_ALLOWED"
+                    )
+                }
+
+                else -> {
+                    passed += ProvisioningStepKey.READY_TO_REBOOT
+                    setProvisioningRebootRecommended(context, true)
+                    setProvisioningProgress(
+                        context = context,
+                        setupState = SetupState.REBOOT_RECOMMENDED,
+                        passed = passed,
+                        loading = false,
+                        error = null
+                    )
+                    Log.i(
+                        policyApplyTag,
+                        "provisioning readiness done deviceCode=$deviceCode launcherReady=$launcherReady kioskReady=$kioskReady"
+                    )
+                    recordPolicyApplied(context, config.configVersionEpochMillis, desiredConfigHash)
+                    PolicyApplyResult(
+                        success = true,
+                        policyStatus = "PARTIAL",
+                        error = "Provisioning readiness prepared; reboot required before full enforcement",
+                        errorCode = "PROVISIONING_REBOOT_RECOMMENDED"
+                    )
+                }
+            }
+        } catch (applyErr: Throwable) {
+            Log.w(
+                policyApplyTag,
+                "provisioning readiness failed deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}",
+                applyErr
+            )
+            runCatching {
+                reportPolicyStateNow(
+                    token = token,
+                    req = DevicePolicyStateReportRequest(
+                        deviceCode = deviceCode,
+                        desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
+                        desiredConfigHash = desiredConfigHash,
+                        policyApplyStatus = "FAILED",
+                        policyApplyError = applyErr.message ?: "Provisioning readiness failed",
+                        policyApplyErrorCode = "PROVISIONING_READINESS_FAILED",
                         policyAppliedAtEpochMillis = policyReportedAt
                     )
                 )
             }
-            return PolicyApplyResult(
+            val passedSteps = _state.value.setupSteps
+                .filter { it.status == ProvisioningStepStatus.PASSED }
+                .map { it.key }
+                .toSet()
+            setProvisioningProgress(
+                context = context,
+                setupState = _state.value.setupState,
+                passed = passedSteps,
+                failed = ProvisioningStepKey.POLICY_STATE_REPORTED to
+                        (applyErr.message ?: "Provisioning readiness failed"),
+                loading = false,
+                error = applyErr.message ?: "Provisioning readiness failed"
+            )
+            PolicyApplyResult(
                 success = false,
                 policyStatus = "FAILED",
-                error = applyErr.message ?: "Policy apply failed",
-                errorCode = "POLICY_APPLY_FAILED"
+                error = applyErr.message ?: "Provisioning readiness failed",
+                errorCode = "PROVISIONING_READINESS_FAILED"
             )
         }
     }
@@ -847,6 +1497,10 @@ class LauncherViewModel : ViewModel() {
     }
 
     private fun startCommandPollLoop(context: Context) {
+        if (!isEnforcementAllowed(context) || _state.value.setupState != SetupState.ENFORCEMENT_ACTIVE) {
+            Log.i(tag, "startCommandPollLoop skipped setupState=${_state.value.setupState} enforcementAllowed=${isEnforcementAllowed(context)}")
+            return
+        }
         if (commandPollJob?.isActive == true) {
             Log.i(tag, "startCommandPollLoop entered but already active")
             return
@@ -857,30 +1511,26 @@ class LauncherViewModel : ViewModel() {
             while (true) {
                 // Initialize deviceCode if not cached yet
                 val deviceCode = cachedDeviceCode ?: resolveCurrentDeviceCode(context, reason = "pollLoop")
-                if (deviceCode != null) {
-                    try {
-                        pollAttempt += 1
-                        Log.i(tag, "poll attempt=$pollAttempt deviceCode=$deviceCode")
-                        pollCommandsNow(
-                            context = context,
-                            deviceCode = deviceCode,
-                            pollLabel = "attempt=$pollAttempt",
-                        )
-                    } catch (e: MdmApi.ApiException) {
-                        Log.e(
-                            tag,
-                            "poll failure api attempt=$pollAttempt deviceCode=$deviceCode code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
-                            e
-                        )
-                        if (isDeviceCodeMismatch(e)) clearToken()
-                    } catch (ce: CancellationException) {
-                        Log.i(tag, "poll loop cancelled attempt=$pollAttempt reason=${ce.message}")
-                        throw ce
-                    } catch (t: Throwable) {
-                        Log.e(tag, "poll failure unexpected attempt=$pollAttempt deviceCode=$deviceCode", t)
-                    }
-                } else {
-                    Log.w(tag, "poll skipped because deviceCode is null")
+                try {
+                    pollAttempt += 1
+                    Log.i(tag, "poll attempt=$pollAttempt deviceCode=$deviceCode")
+                    pollCommandsNow(
+                        context = context,
+                        deviceCode = deviceCode,
+                        pollLabel = "attempt=$pollAttempt",
+                    )
+                } catch (e: MdmApi.ApiException) {
+                    Log.e(
+                        tag,
+                        "poll failure api attempt=$pollAttempt deviceCode=$deviceCode code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}",
+                        e
+                    )
+                    if (isDeviceCodeMismatch(e)) clearToken()
+                } catch (ce: CancellationException) {
+                    Log.i(tag, "poll loop cancelled attempt=$pollAttempt reason=${ce.message}")
+                    throw ce
+                } catch (t: Throwable) {
+                    Log.e(tag, "poll failure unexpected attempt=$pollAttempt deviceCode=$deviceCode", t)
                 }
                 delay(15_000L)
             }
@@ -1405,11 +2055,23 @@ class LauncherViewModel : ViewModel() {
                 val policy = DevicePolicyHelper(context)
                 val isOwnerFromHelper = policy.isDeviceOwner()
                 val isOwnerFromDpm = isDeviceOwnerNow(context)
+                val enforcementAllowed = isEnforcementAllowed(context) &&
+                        _state.value.setupState == SetupState.ENFORCEMENT_ACTIVE
                 Log.i(
                     tag,
-                    "executeCommand lock_screen ownerCheck commandId=$commandId leaseToken=$leaseToken helper=$isOwnerFromHelper dpm=$isOwnerFromDpm"
+                    "executeCommand lock_screen ownerCheck commandId=$commandId leaseToken=$leaseToken helper=$isOwnerFromHelper dpm=$isOwnerFromDpm enforcementAllowed=$enforcementAllowed"
                 )
-                if (!isOwnerFromHelper || !isOwnerFromDpm) {
+                if (!enforcementAllowed) {
+                    _state.value = _state.value.copy(
+                        lockContainmentStatus = "FAILED",
+                        lockContainmentErrorCode = "SETUP_NOT_COMPLETE"
+                    )
+                    CommandExecResult(
+                        success = false,
+                        error = "Provisioning setup is not complete, cannot start kiosk containment",
+                        errorCode = "SETUP_NOT_COMPLETE"
+                    )
+                } else if (!isOwnerFromHelper || !isOwnerFromDpm) {
                     _state.value = _state.value.copy(
                         lockContainmentStatus = "FAILED",
                         lockContainmentErrorCode = "NOT_DEVICE_OWNER"
