@@ -39,8 +39,10 @@ fun LoadingOrErrorScreen(
     error: String?,
     onRetry: () -> Unit
 ) {
+    val preparingApps = error == LauncherViewModel.LAUNCHER_PREPARING_MESSAGE
     val title = when {
         loading -> "Đang tải launcher"
+        preparingApps -> "Đang chuẩn bị launcher"
         error != null -> "Không thể tải launcher"
         else -> "Đang chuẩn bị launcher"
     }
@@ -48,7 +50,7 @@ fun LoadingOrErrorScreen(
     val message = when {
         loading -> "Thiết bị đang đồng bộ trạng thái với MDM server..."
         error != null -> error
-        else -> "Launcher chưa nhận đủ state để hiển thị danh sách ứng dụng."
+        else -> LauncherViewModel.LAUNCHER_PREPARING_MESSAGE
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -101,7 +103,7 @@ fun LoadingOrErrorScreen(
                         CircularProgressIndicator()
                     }
 
-                    if (!loading) {
+                    if (!loading && !preparingApps) {
                         Button(onClick = onRetry) {
                             Text("Thử lại")
                         }

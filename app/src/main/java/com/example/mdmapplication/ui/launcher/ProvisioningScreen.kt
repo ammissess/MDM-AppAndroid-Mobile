@@ -91,7 +91,10 @@ fun ProvisioningScreen(
         highlightedStep?.detail?.takeIf { it.isNotBlank() },
         error?.takeIf { it.isNotBlank() },
         rebootError?.takeIf { it.isNotBlank() }
-    ).distinct().joinToString("\n")
+    )
+        .distinct()
+        .map { provisioningTechnicalDetail(it, language) }
+        .joinToString("\n")
 
     val revealedPassedKeys = remember { mutableStateListOf<ProvisioningStepKey>() }
     LaunchedEffect(steps.map { it.key to it.status }) {
@@ -456,4 +459,3 @@ private fun statusGlyph(status: ProvisioningStepStatus): String =
         ProvisioningStepStatus.FAILED -> "!"
         ProvisioningStepStatus.MANUAL_REQUIRED -> "!"
     }
-

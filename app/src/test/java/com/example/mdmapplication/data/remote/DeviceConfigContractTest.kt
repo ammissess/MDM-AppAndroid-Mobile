@@ -161,21 +161,67 @@ class DeviceConfigContractTest {
     }
 
     @Test
+    fun unlockAlreadyUnlockedWhileRemoteLocked_shouldStayLockedAndShowRemoteLockMessage() {
+        val viewModel = LauncherViewModel()
+        viewModel.debugSetStateForTest(
+            LauncherUiState(
+                lockState = DeviceLockState.LOCKED,
+                noProfileLocked = false,
+                lockReason = null,
+                lockContainmentStatus = "FULL"
+            )
+        )
+
+        val shouldLoadConfig = viewModel.debugApplyUnlockResponseForTest(
+            status = "ACTIVE",
+            message = "Already unlocked"
+        )
+
+        val state = viewModel.state.value
+        assertEquals(false, shouldLoadConfig)
+        assertEquals(DeviceLockState.LOCKED, state.lockState)
+        assertEquals(false, state.noProfileLocked)
+        assertEquals(LauncherViewModel.REMOTE_SCREEN_UNLOCK_UNSUPPORTED_MESSAGE, state.unlockError)
+    }
+
+    @Test
     fun configSourceCommandWhileLocked_shouldStayLocked() {
         val viewModel = LauncherViewModel()
         val method = LauncherViewModel::class.java.getDeclaredMethod(
             "shouldStayLockedOnConfigUpdate",
             DeviceLockState::class.java,
+            java.lang.Boolean.TYPE,
             String::class.java
         ).apply { isAccessible = true }
 
         val shouldStayLocked = method.invoke(
             viewModel,
             DeviceLockState.LOCKED,
+            false,
             "command:refresh_config"
         ) as Boolean
 
         assertTrue(shouldStayLocked)
+    }
+
+    @Test
+    fun configSourceRefreshWhileNoProfileLocked_shouldBecomeActiveAfterConfig() {
+        val viewModel = LauncherViewModel()
+        val method = LauncherViewModel::class.java.getDeclaredMethod(
+            "shouldStayLockedOnConfigUpdate",
+            DeviceLockState::class.java,
+            java.lang.Boolean.TYPE,
+            String::class.java
+        ).apply { isAccessible = true }
+
+        val shouldStayLocked = method.invoke(
+            viewModel,
+            DeviceLockState.LOCKED,
+            true,
+            "refresh"
+        ) as Boolean
+
+        assertEquals(false, shouldStayLocked)
     }
 
     private fun sampleConfig(lockPrivateDnsConfig: Boolean): DeviceConfigResponse =

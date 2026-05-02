@@ -33,10 +33,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.mdmapplication.BuildConfig
+import kotlinx.coroutines.delay
 
 private val UnlockBgTop = Color(0xFF300A13)
 private val UnlockBgBottom = Color(0xFF070B12)
@@ -48,6 +53,7 @@ private val UnlockError = Color(0xFFFF9AA6)
 
 @Composable
 fun UnlockScreen(
+    language: AppLanguage,
     error: String?,
     lockReason: String?,
     noProfileLocked: Boolean,
@@ -58,12 +64,15 @@ fun UnlockScreen(
     unlockSubmitting: Boolean,
     onUnlock: (String) -> Unit
 ) {
+    val strings = unlockStrings(language)
     var password by remember { mutableStateOf("") }
     var previousUnlockSubmitting by remember { mutableStateOf(unlockSubmitting) }
     var previousNoProfileLocked by remember { mutableStateOf(noProfileLocked) }
     var previousLockReason by remember { mutableStateOf(lockReason) }
     var previousLockState by remember { mutableStateOf(lockedState) }
     var previousError by remember { mutableStateOf(error) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     fun clearPassword(reason: String) {
         if (password.isEmpty()) return
@@ -95,7 +104,19 @@ fun UnlockScreen(
         previousError = error
     }
 
+    LaunchedEffect(lockedState) {
+        if (lockedState == DeviceLockState.LOCKED) {
+            delay(250L)
+            runCatching { focusRequester.requestFocus() }
+                .onFailure { Log.w("MDM_UNLOCK_UI", "focus request failed", it) }
+            delay(120L)
+            keyboardController?.show()
+            Log.i("MDM_UNLOCK_UI", "keyboard focus requested")
+        }
+    }
+
     val noProfileMessageVisible = noProfileLocked || isNoProfileLockReason(lockReason)
+    val displayError = unlockErrorMessage(error, noProfileLocked, language)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -130,14 +151,14 @@ fun UnlockScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text(
-                        text = "Thiết bị đang bị khóa",
+                        text = strings.title,
                         color = UnlockText,
                         style = MaterialTheme.typography.headlineSmall,
                         textAlign = TextAlign.Center
                     )
 
                     Text(
-                        text = "Chính sách MDM đã chặn sử dụng launcher. Chỉ quản trị viên mới có thể cung cấp mã mở khóa.",
+                        text = strings.description,
                         color = UnlockMuted,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center
@@ -145,53 +166,35 @@ fun UnlockScreen(
 
                     if (noProfileMessageVisible) {
                         Text(
-                            text = LauncherViewModel.NO_PROFILE_LOCKED_MESSAGE,
+                            text = strings.noProfileLocked,
                             color = UnlockError,
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center
                         )
                     }
 
-                    if (
-                        noProfileLocked &&
-                        !lockReason.isNullOrBlank() &&
-                        lockReason != LauncherViewModel.NO_PROFILE_LOCKED_MESSAGE
-                    ) {
+                    if (BuildConfig.DEBUG) {
                         Text(
-                            text = lockReason,
-                            color = UnlockError,
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = containmentStatusText(lockContainmentStatus, lockContainmentErrorCode, strings),
+                            color = UnlockMuted,
+                            style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center
                         )
                     }
-
-                    val containmentText = buildString {
-                        append("Containment: ")
-                        append(lockContainmentStatus ?: "PENDING")
-                        if (!lockContainmentErrorCode.isNullOrBlank()) {
-                            append(" (")
-                            append(lockContainmentErrorCode)
-                            append(")")
-                        }
-                    }
-                    Text(
-                        text = containmentText,
-                        color = UnlockMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center
-                    )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
-                        label = { Text("Mật khẩu mở khóa") },
+                        label = { Text(strings.passwordLabel) },
                         singleLine = true,
-                        isError = error != null,
+                        isError = displayError != null,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.White.copy(alpha = 0.05f),
                             unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
@@ -209,9 +212,9 @@ fun UnlockScreen(
                         )
                     )
 
-                    if (error != null) {
+                    if (displayError != null) {
                         Text(
-                            text = error,
+                            text = displayError,
                             color = UnlockError,
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center
@@ -233,11 +236,100 @@ fun UnlockScreen(
                             contentColor = Color(0xFF07111E)
                         )
                     ) {
-                        Text(if (unlockSubmitting) "Đang mở khóa..." else "Mở khóa thiết bị")
+                        Text(if (unlockSubmitting) strings.submitting else strings.unlockButton)
                     }
                 }
             }
         }
+    }
+}
+
+private data class UnlockStrings(
+    val title: String,
+    val description: String,
+    val noProfileLocked: String,
+    val passwordLabel: String,
+    val unlockButton: String,
+    val submitting: String,
+    val wrongPassword: String,
+    val blockedNoProfile: String,
+    val remoteScreenUnlockUnsupported: String,
+    val genericError: String,
+    val containmentActive: String,
+    val containmentPreparing: String,
+    val containmentLimited: String
+)
+
+private fun unlockStrings(language: AppLanguage): UnlockStrings =
+    when (language) {
+        AppLanguage.VI -> UnlockStrings(
+            title = "Thiết bị đang bị khóa",
+            description = "Nhập mã mở khóa do quản trị viên cung cấp để tiếp tục sử dụng thiết bị.",
+            noProfileLocked = "Thiết bị chưa được gán hồ sơ cấu hình. Vui lòng liên hệ quản trị viên.",
+            passwordLabel = "Mã mở khóa",
+            unlockButton = "Mở khóa thiết bị",
+            submitting = "Đang mở khóa...",
+            wrongPassword = "Mã mở khóa không đúng.",
+            blockedNoProfile = "Thiết bị chưa được gán hồ sơ cấu hình nên chưa thể mở khóa.",
+            remoteScreenUnlockUnsupported =
+                "Thiết bị đang bị khóa từ xa. Mã kích hoạt chỉ dùng để kích hoạt thiết bị, không dùng để mở khóa màn hình. Chức năng mở khóa màn hình từ xa cần được hỗ trợ bằng lệnh riêng từ hệ thống quản trị.",
+            genericError = "Không thể mở khóa. Vui lòng kiểm tra mã và thử lại.",
+            containmentActive = "Chế độ khóa đang hoạt động.",
+            containmentPreparing = "Đang kích hoạt chế độ khóa.",
+            containmentLimited = "Chế độ khóa chưa hoàn tất."
+        )
+
+        AppLanguage.EN -> UnlockStrings(
+            title = "Device is locked",
+            description = "Enter the unlock code from your administrator to continue using this device.",
+            noProfileLocked = "This device has not been assigned a configuration profile. Contact your administrator.",
+            passwordLabel = "Unlock code",
+            unlockButton = "Unlock device",
+            submitting = "Unlocking...",
+            wrongPassword = "The unlock code is incorrect.",
+            blockedNoProfile = "This device has no configuration profile yet, so it cannot be unlocked.",
+            remoteScreenUnlockUnsupported =
+                "This device is remotely screen-locked. The activation code cannot unlock this screen. Remote screen unlock requires a dedicated management command.",
+            genericError = "Unable to unlock. Check the code and try again.",
+            containmentActive = "Lock mode is active.",
+            containmentPreparing = "Lock mode is being activated.",
+            containmentLimited = "Lock mode is not fully active."
+        )
+    }
+
+private fun containmentStatusText(
+    status: String?,
+    errorCode: String?,
+    strings: UnlockStrings
+): String {
+    return when (status?.uppercase()) {
+        "FULL" -> strings.containmentActive
+        "FAILED", "PARTIAL" -> strings.containmentLimited
+        else -> strings.containmentPreparing
+    }.let { text ->
+        if (BuildConfig.DEBUG && !errorCode.isNullOrBlank()) "$text ($errorCode)" else text
+    }
+}
+
+private fun unlockErrorMessage(error: String?, noProfileLocked: Boolean, language: AppLanguage): String? {
+    if (error.isNullOrBlank()) return null
+    val strings = unlockStrings(language)
+    val normalized = error.trim().lowercase()
+    return when {
+        noProfileLocked || normalized.contains("profile not linked") ||
+            normalized.contains("profile_not_linked") ||
+            normalized.contains("device_profile_not_linked") -> strings.blockedNoProfile
+
+        normalized.contains("invalid password") ||
+            normalized.contains("không chính xác") ||
+            normalized.contains("khong chinh xac") -> strings.wrongPassword
+
+        normalized.contains("khóa từ xa") ||
+            normalized.contains("khoa tu xa") ||
+            normalized.contains("remotely screen-locked") ||
+            normalized.contains("remote screen lock") -> strings.remoteScreenUnlockUnsupported
+
+        else -> strings.genericError
     }
 }
 
@@ -247,5 +339,6 @@ private fun isNoProfileLockReason(lockReason: String?): Boolean {
     return reason.contains("profile not linked") ||
         reason.contains("profile_not_linked") ||
         reason.contains("device_profile_not_linked") ||
+        reason.contains("chưa được gán") ||
         reason.contains("chua duoc gan profile")
 }

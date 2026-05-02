@@ -90,6 +90,10 @@ class LauncherViewModel : ViewModel() {
     companion object {
         const val NO_PROFILE_LOCKED_MESSAGE = "Thiết bị chưa được gán profile. Vui lòng liên hệ quản trị viên."
         const val NO_PROFILE_UNLOCK_BLOCKED_MESSAGE = "Thiết bị chưa được gán profile. Không thể mở khóa."
+        const val REMOTE_SCREEN_UNLOCK_UNSUPPORTED_MESSAGE =
+            "Thiết bị đang bị khóa từ xa. Mã kích hoạt chỉ dùng để kích hoạt thiết bị, không dùng để mở khóa màn hình. Chức năng mở khóa màn hình từ xa cần được hỗ trợ bằng lệnh riêng từ hệ thống quản trị."
+        const val LAUNCHER_PREPARING_MESSAGE =
+            "Launcher đang chuẩn bị dữ liệu ứng dụng. Vui lòng chờ thiết bị nhận hồ sơ cấu hình và danh sách ứng dụng được phép."
     }
 
     fun updateLockContainment(status: String?, errorCode: String?) {
@@ -754,14 +758,34 @@ class LauncherViewModel : ViewModel() {
         )
 
         return if (normalizedStatus == "ACTIVE") {
-            _state.value = _state.value.copy(
-                noProfileLocked = false,
-                lockReason = null,
-                unlockError = null,
-                error = null
-            )
-            Log.i(tag, "MDM_UNLOCK state transition ACTIVE source=unlock_response deviceCode=$deviceCode")
-            true
+            if (shouldRejectActivationUnlockForRemoteScreenLock(message)) {
+                val current = _state.value
+                _state.value = current.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    noProfileLocked = false,
+                    lockReason = null,
+                    lockContainmentStatus = current.lockContainmentStatus ?: "PENDING",
+                    lockContainmentErrorCode = current.lockContainmentErrorCode,
+                    unlockError = REMOTE_SCREEN_UNLOCK_UNSUPPORTED_MESSAGE,
+                    error = null,
+                    unlockSubmitting = false
+                )
+                Log.w(
+                    tag,
+                    "MDM_UNLOCK activation noop ignored for remote screen lock source=unlock_response deviceCode=$deviceCode message=$message"
+                )
+                false
+            } else {
+                _state.value = _state.value.copy(
+                    noProfileLocked = false,
+                    lockReason = null,
+                    unlockError = null,
+                    error = null
+                )
+                Log.i(tag, "MDM_UNLOCK state transition ACTIVE source=unlock_response deviceCode=$deviceCode")
+                true
+            }
         } else {
             val unlockErrorMessage = if (mappedNoProfile) {
                 NO_PROFILE_UNLOCK_BLOCKED_MESSAGE
@@ -781,6 +805,23 @@ class LauncherViewModel : ViewModel() {
             Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_response deviceCode=$deviceCode noProfileLocked=$mappedNoProfile")
             false
         }
+    }
+
+    private fun shouldRejectActivationUnlockForRemoteScreenLock(message: String?): Boolean {
+        val current = _state.value
+        return current.lockState == DeviceLockState.LOCKED &&
+            !current.noProfileLocked &&
+            isAlreadyUnlockedActivationResponse(message)
+    }
+
+    private fun isAlreadyUnlockedActivationResponse(message: String?): Boolean {
+        val normalized = message
+            ?.trim()
+            ?.lowercase()
+            ?.replace('-', ' ')
+            ?.replace('_', ' ')
+            ?: return false
+        return normalized.contains("already unlocked")
     }
 
     fun sendEvent(type: String, payload: String = "{}") {
@@ -906,13 +947,18 @@ class LauncherViewModel : ViewModel() {
                 val changed = previousConfig?.allowedApps != config.allowedApps ||
                         previousConfig?.configVersionEpochMillis != config.configVersionEpochMillis
 
-                val shouldStayLocked = shouldStayLockedOnConfigUpdate(_state.value.lockState, source)
+                val shouldStayLocked = shouldStayLockedOnConfigUpdate(
+                    currentLockState = _state.value.lockState,
+                    noProfileLocked = _state.value.noProfileLocked,
+                    source = source
+                )
                 val enforcementAllowedNow = isEnforcementAllowed(context)
                 val currentSetupState = _state.value.setupState
+                val launcherReady = config.allowedApps.isEmpty() || apps.isNotEmpty()
 
                 _state.value = _state.value.copy(
                     loading = false,
-                    lockState = if (enforcementAllowedNow) {
+                    lockState = if (enforcementAllowedNow && launcherReady) {
                         if (shouldStayLocked) DeviceLockState.LOCKED else DeviceLockState.ACTIVE
                     } else {
                         DeviceLockState.UNKNOWN
@@ -924,16 +970,16 @@ class LauncherViewModel : ViewModel() {
                     },
                     noProfileLocked = false,
                     lockReason = null,
-                    lockContainmentStatus = if (enforcementAllowedNow && shouldStayLocked) "PENDING" else null,
+                    lockContainmentStatus = if (enforcementAllowedNow && launcherReady && shouldStayLocked) "PENDING" else null,
                     lockContainmentErrorCode = null,
                     config = config,
                     apps = apps,
-                    error = null,
+                    error = if (launcherReady) null else LAUNCHER_PREPARING_MESSAGE,
                     applyingConfiguration = false,
                     unlockError = null
                 )
 
-                if (changed && enforcementAllowedNow) {
+                if (changed && enforcementAllowedNow && launcherReady) {
                     _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
                 }
 
@@ -1055,7 +1101,7 @@ class LauncherViewModel : ViewModel() {
             Log.i(policyApplyTag, "apply policy start deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
 
             if (!policy.isDeviceOwner()) {
-                Log.w(policyApplyTag, "apply policy skipped deviceCode=$deviceCode ownerCheck=false")
+                Log.w(policyApplyTag, "enforcement skip reason=not_device_owner deviceCode=$deviceCode")
                 reportPolicyStateNow(
                     token = token,
                     req = DevicePolicyStateReportRequest(
@@ -1077,6 +1123,7 @@ class LauncherViewModel : ViewModel() {
             }
 
             if (!isEnforcementAllowed(context)) {
+                Log.i(policyApplyTag, "enforcement skip reason=provisioning_reboot_gate deviceCode=$deviceCode")
                 return@withLock prepareProvisioningReadinessAndReport(
                     context = context,
                     deviceCode = deviceCode,
@@ -1090,7 +1137,13 @@ class LauncherViewModel : ViewModel() {
             if (isPolicyAlreadyApplied(context, config.configVersionEpochMillis, appliedConfigHash)) {
                 Log.i(
                     policyApplyTag,
-                    "apply policy skipped unchanged deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+                    "enforcement skip reason=unchanged_config deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+                )
+                val runtimeOutcome = policy.ensureRuntimeKioskPolicy(
+                    launcherPackage = context.packageName,
+                    allowedApps = config.allowedApps,
+                    kioskMode = config.kioskMode,
+                    reason = "unchanged_config"
                 )
                 reportPolicyStateNow(
                     token = token,
@@ -1098,19 +1151,24 @@ class LauncherViewModel : ViewModel() {
                         deviceCode = deviceCode,
                         desiredConfigVersionEpochMillis = config.configVersionEpochMillis,
                         desiredConfigHash = appliedConfigHash,
-                        appliedConfigVersionEpochMillis = config.configVersionEpochMillis,
-                        appliedConfigHash = appliedConfigHash,
-                        policyApplyStatus = "SUCCESS",
+                        appliedConfigVersionEpochMillis = if (runtimeOutcome.status == "SUCCESS") config.configVersionEpochMillis else null,
+                        appliedConfigHash = if (runtimeOutcome.status == "SUCCESS") appliedConfigHash else null,
+                        policyApplyStatus = runtimeOutcome.status,
+                        policyApplyError = runtimeOutcome.error,
+                        policyApplyErrorCode = runtimeOutcome.errorCode,
                         policyAppliedAtEpochMillis = policyReportedAt
                     )
                 )
                 return@withLock PolicyApplyResult(
-                    success = true,
-                    policyStatus = "SUCCESS"
+                    success = runtimeOutcome.status != "FAILED",
+                    policyStatus = runtimeOutcome.status,
+                    error = runtimeOutcome.error,
+                    errorCode = runtimeOutcome.errorCode
                 )
             }
 
             try {
+                Log.i(policyApplyTag, "enforcement start reason=config_changed deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
                 Log.i(tag, "applyFromServerConfig enter deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}")
                 val applyOutcome = policy.applyFromServerConfig(
                     launcherPackage = context.packageName,
@@ -1702,6 +1760,7 @@ class LauncherViewModel : ViewModel() {
         val (storageFreeBytes, storageTotalBytes) = readStorageInfoBytes(context)
         val agentVersion = BuildConfig.VERSION_NAME.takeIf { it.isNotBlank() }
         val agentBuildCode = BuildConfig.VERSION_CODE.takeIf { it > 0 }
+        Log.i(tag, "state payload contains ipAddress=false reason=backend_state_contract_no_field")
 
         try {
             api.reportStateSnapshot(
@@ -2511,9 +2570,14 @@ class LauncherViewModel : ViewModel() {
             ?: ""
     }
 
-    private fun shouldStayLockedOnConfigUpdate(currentLockState: DeviceLockState, source: String): Boolean {
-        // Keep LOCKED lifecycle unless unlock explicitly succeeds.
-        return currentLockState == DeviceLockState.LOCKED && source != "unlock"
+    private fun shouldStayLockedOnConfigUpdate(
+        currentLockState: DeviceLockState,
+        noProfileLocked: Boolean,
+        source: String
+    ): Boolean {
+        // Keep remote screen-lock lifecycle unless unlock explicitly succeeds.
+        // A no-profile lock is a setup gate and must clear once a valid profile config arrives.
+        return currentLockState == DeviceLockState.LOCKED && !noProfileLocked && source != "unlock"
     }
 
     private fun normalizeConfigErrorCode(e: MdmApi.ApiException): String {

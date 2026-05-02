@@ -186,7 +186,7 @@ fun userFacingProvisioningMessage(
 
             step == ProvisioningStepKey.DEVICE_OWNER_ACTIVE &&
                     status == ProvisioningStepStatus.MANUAL_REQUIRED ->
-                "Chạy host-side provisioning script trên máy phát triển, hoặc dùng QR/manual provisioning trên thiết bị sạch."
+                "Chạy tập lệnh cấp quyền thiết bị trên máy phát triển, hoặc dùng mã QR/thiết lập thủ công trên thiết bị sạch."
 
             status == ProvisioningStepStatus.FAILED ->
                 "Bước này chưa hoàn tất. Hãy kiểm tra điều kiện thiết lập rồi bấm “Thử lại”."
@@ -228,4 +228,61 @@ fun userFacingProvisioningMessage(
 fun userFacingProvisioningError(rawError: String?, language: AppLanguage): String? {
     if (rawError.isNullOrBlank()) return null
     return provisioningStrings(language).genericError
+}
+
+fun provisioningTechnicalDetail(rawDetail: String, language: AppLanguage): String {
+    val detail = rawDetail.trim()
+    if (detail.isEmpty()) return detail
+
+    return when (language) {
+        AppLanguage.VI -> when {
+            detail == "Run the host provisioning script after installing on a clean emulator/device." ->
+                "Chạy tập lệnh cấp quyền thiết bị trên máy phát triển sau khi cài ứng dụng trên trình giả lập/thiết bị sạch."
+
+            detail == "Backend returned LOCKED before setup completed. Finish profile/link state in backend, then retry." ->
+                "Backend trả về LOCKED trước khi thiết lập hoàn tất. Hãy hoàn tất gán hồ sơ trên backend rồi thử lại."
+
+            detail == "Assign a backend profile to this device, then retry provisioning." ->
+                "Gán hồ sơ cấu hình cho thiết bị trên backend, sau đó thử lại provisioning."
+
+            detail == "Persistent HOME is not resolved to this app yet." ->
+                "HOME mặc định chưa trỏ về ứng dụng MDM."
+
+            detail == "Launcher readiness failed" ->
+                "Launcher chưa sẵn sàng."
+
+            detail == "Lock task is not permitted for the MDM launcher package." ->
+                "Gói launcher MDM chưa được phép chạy lock task."
+
+            detail == "Kiosk readiness failed" ->
+                "Chế độ kiosk chưa sẵn sàng."
+
+            detail == "Provisioning readiness prepared; reboot required before full enforcement" ->
+                "Đã chuẩn bị trạng thái provisioning. Cần khởi động lại trước khi bật enforcement đầy đủ."
+
+            detail == "Provisioning readiness already prepared; reboot required before full enforcement" ->
+                "Trạng thái provisioning đã được chuẩn bị. Cần khởi động lại trước khi bật enforcement đầy đủ."
+
+            detail.startsWith("Unknown backend status:") ->
+                "Backend trả về trạng thái không xác định: ${detail.substringAfter(':').trim()}"
+
+            detail.startsWith("Device is not owner") ->
+                "Thiết bị chưa ở trạng thái Device Owner."
+
+            detail.startsWith("HTTP ") ->
+                "Backend trả về lỗi $detail."
+
+            detail.contains("Load config", ignoreCase = true) ->
+                "Không thể tải cấu hình từ backend."
+
+            else -> "Chi tiết gốc: $detail"
+        }
+
+        AppLanguage.EN -> when {
+            detail.startsWith("Unknown backend status:") ->
+                "Unknown backend status: ${detail.substringAfter(':').trim()}"
+
+            else -> detail
+        }
+    }
 }

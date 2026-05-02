@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
@@ -66,9 +67,15 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.i(tag, "onCreate savedInstanceState=${savedInstanceState != null} taskId=$taskId")
         val initialLanguage = readAppLanguage()
         languageSelected = initialLanguage != null
+        val wakeReason = parseWakeReason(intent) ?: "app_launch:onCreate"
+        Log.i(
+            tag,
+            "onCreate savedInstanceState=${savedInstanceState != null} taskId=$taskId pid=${Process.myPid()} " +
+                    "action=${intent?.action} wakeReason=$wakeReason wakeAttempt=${intent?.getIntExtra(EXTRA_WAKE_ATTEMPT, 0)} " +
+                    "languageSelected=$languageSelected setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -88,7 +95,6 @@ class LauncherActivity : ComponentActivity() {
 
         val policy = DevicePolicyHelper(this)
 
-        val wakeReason = parseWakeReason(intent) ?: "app_launch:onCreate"
         if (languageSelected) {
             triggerRuntimeWake(reason = wakeReason, force = true)
         }
@@ -206,6 +212,7 @@ class LauncherActivity : ComponentActivity() {
                     st.lockState == DeviceLockState.LOCKED -> {
                         BackHandler(enabled = true) { }
                         UnlockScreen(
+                            language,
                             st.unlockError,
                             st.lockReason,
                             st.noProfileLocked,
@@ -229,7 +236,31 @@ class LauncherActivity : ComponentActivity() {
                             apps = st.apps,
                             isDeviceOwner = st.isDeviceOwner,
                             onAppClick = { pkg ->
-                                packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+                                Log.i(tag, "launcher app click package=$pkg")
+                                val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+                                if (launchIntent == null) {
+                                    Log.w(tag, "launcher app click blocked reason=not_launchable package=$pkg")
+                                    Toast.makeText(
+                                        this@LauncherActivity,
+                                        "Ứng dụng chưa sẵn sàng để mở.",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    if (st.isDeviceOwner) {
+                                        policy.preparePackageForLaunch(pkg)
+                                    }
+
+                                    runCatching { startActivity(launchIntent) }
+                                        .onSuccess { Log.i(tag, "launcher app launch requested package=$pkg") }
+                                        .onFailure { err ->
+                                            Log.w(tag, "launcher app launch failed package=$pkg", err)
+                                            Toast.makeText(
+                                                this@LauncherActivity,
+                                                "Không thể mở ứng dụng này.",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                }
                             },
                             onClearPersistentHome = {
                                 if (st.isDeviceOwner) policy.clearPersistentPreferredActivities()
@@ -259,13 +290,22 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        Log.i(
+            tag,
+            "onStart taskId=$taskId pid=${Process.myPid()} languageSelected=$languageSelected " +
+                    "setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         registerNetworkCallback()
     }
 
     override fun onResume() {
         super.onResume()
         recoveryGeneration += 1
-        Log.i(tag, "onResume taskId=$taskId")
+        Log.i(
+            tag,
+            "onResume taskId=$taskId pid=${Process.myPid()} languageSelected=$languageSelected " +
+                    "setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         scheduleDelayedLockContainment("lifecycle:onResume")
         if (viewModel.state.value.lockState != DeviceLockState.LOCKED) {
             triggerRuntimeWake("ui:onResume")
@@ -276,6 +316,11 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        Log.i(
+            tag,
+            "onWindowFocusChanged hasFocus=$hasFocus taskId=$taskId languageSelected=$languageSelected " +
+                    "setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         if (hasFocus) {
             scheduleDelayedLockContainment("lifecycle:onWindowFocusChanged")
         }
@@ -294,6 +339,11 @@ class LauncherActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        Log.i(
+            tag,
+            "onPause taskId=$taskId isFinishing=$isFinishing languageSelected=$languageSelected " +
+                    "setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
             scheduleDelayedForegroundRecovery("lifecycle:onPause")
         }
@@ -301,6 +351,11 @@ class LauncherActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        Log.i(
+            tag,
+            "onStop taskId=$taskId isFinishing=$isFinishing languageSelected=$languageSelected " +
+                    "setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
             scheduleDelayedForegroundRecovery("lifecycle:onStop")
         }
@@ -326,6 +381,11 @@ class LauncherActivity : ComponentActivity() {
     }
 
     override fun finish() {
+        Log.i(
+            tag,
+            "finish requested taskId=$taskId isFinishing=$isFinishing languageSelected=$languageSelected " +
+                    "setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         if (viewModel.state.value.lockState == DeviceLockState.LOCKED) {
             Log.i(lockContainmentTag, "enforce reason=finish_blocked")
             enforceLockedContainment("finish_blocked")
@@ -342,15 +402,18 @@ class LauncherActivity : ComponentActivity() {
             return
         }
         lastBringToFrontAtMs = now
-        startActivity(
-            Intent(this, LauncherActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            }
-        )
+        val launch = Intent(this, LauncherActivity::class.java).apply {
+            action = ACTION_RUNTIME_WAKE
+            putExtra(EXTRA_WAKE_REASON, "activity:bringSelfToFront")
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+        }
+        runCatching { startActivity(launch) }
+            .onSuccess { Log.i(lockContainmentTag, "bringSelfToFront requested") }
+            .onFailure { err -> Log.w(lockContainmentTag, "bringSelfToFront failed", err) }
     }
 
     private fun triggerRuntimeWake(reason: String, force: Boolean = false) {
@@ -358,7 +421,11 @@ class LauncherActivity : ComponentActivity() {
             Log.i(tag, "runtime retrigger skipped reason=$reason languageSelected=false")
             return
         }
-        Log.i(tag, "runtime retrigger reason=$reason force=$force")
+        Log.i(
+            tag,
+            "runtime retrigger reason=$reason force=$force setupState=${viewModel.state.value.setupState} " +
+                    "lockState=${viewModel.state.value.lockState}"
+        )
         viewModel.requestRuntimeWake(context = this, reason = reason, force = force)
     }
 
@@ -481,7 +548,11 @@ class LauncherActivity : ComponentActivity() {
     override fun onDestroy() {
         recoveryGeneration += 1
         mainHandler.removeCallbacksAndMessages(null)
-        Log.w(tag, "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations")
+        Log.w(
+            tag,
+            "onDestroy taskId=$taskId isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations " +
+                    "languageSelected=$languageSelected setupState=${viewModel.state.value.setupState} lockState=${viewModel.state.value.lockState}"
+        )
         super.onDestroy()
     }
 
@@ -557,15 +628,19 @@ class LauncherActivity : ComponentActivity() {
     companion object {
         const val ACTION_RUNTIME_WAKE = "com.example.mdmapplication.action.RUNTIME_WAKE"
         const val EXTRA_WAKE_REASON = "extra_wake_reason"
+        const val EXTRA_WAKE_ATTEMPT = "extra_wake_attempt"
         private const val LANGUAGE_PREFS_NAME = "mdm_app_preferences"
         private const val KEY_APP_LANGUAGE = "app_language"
         private const val UNLOCK_ERROR_CHANNEL_ID = "unlock_error_channel"
         private const val UNLOCK_ERROR_NOTIFICATION_ID = 4001
 
-        fun createRuntimeWakeIntent(context: Context, reason: String): Intent =
+        fun createRuntimeWakeIntent(context: Context, reason: String, attempt: Int? = null): Intent =
             Intent(context, LauncherActivity::class.java).apply {
                 action = ACTION_RUNTIME_WAKE
                 putExtra(EXTRA_WAKE_REASON, reason)
+                if (attempt != null) {
+                    putExtra(EXTRA_WAKE_ATTEMPT, attempt)
+                }
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                             Intent.FLAG_ACTIVITY_CLEAR_TOP or

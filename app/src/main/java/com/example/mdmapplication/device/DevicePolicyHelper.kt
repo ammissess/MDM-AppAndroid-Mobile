@@ -265,6 +265,100 @@ class DevicePolicyHelper(private val context: Context) {
             .onFailure { Log.w(tag, "setPersistentHomeToLauncher failed", it) }
     }
 
+    fun ensureLauncherHomeApplied(reason: String): PolicyApplyOutcome {
+        Log.i(tag, "launcher home apply start reason=$reason")
+        if (!isDeviceOwner()) {
+            Log.i(tag, "launcher home apply skip reason=not_device_owner source=$reason")
+            return PolicyApplyOutcome(
+                status = "FAILED",
+                error = "Device is not owner, launcher HOME cannot be applied",
+                errorCode = "POLICY_NOT_DEVICE_OWNER"
+            )
+        }
+
+        if (isDefaultLauncherApp()) {
+            Log.i(tag, "launcher home apply skip reason=already_default source=$reason")
+            return PolicyApplyOutcome(status = "SUCCESS")
+        }
+
+        return runCatching {
+            setPersistentHomeToLauncherStrict()
+            val defaultAfter = isDefaultLauncherApp()
+            val status = if (defaultAfter) "SUCCESS" else "PARTIAL"
+            Log.i(tag, "launcher home apply success reason=$reason defaultAfter=$defaultAfter status=$status")
+            PolicyApplyOutcome(
+                status = status,
+                error = if (defaultAfter) null else "Launcher HOME preference applied but resolver has not switched yet",
+                errorCode = if (defaultAfter) null else "NOT_DEFAULT_LAUNCHER"
+            )
+        }.getOrElse { err ->
+            Log.w(tag, "launcher home apply failed reason=$reason", err)
+            PolicyApplyOutcome(
+                status = "FAILED",
+                error = err.message ?: "Launcher HOME apply failed",
+                errorCode = "LAUNCHER_HOME_APPLY_FAILED"
+            )
+        }
+    }
+
+    fun ensureRuntimeKioskPolicy(
+        launcherPackage: String,
+        allowedApps: List<String>,
+        kioskMode: Boolean,
+        reason: String
+    ): PolicyApplyOutcome {
+        Log.i(tag, "runtime kiosk policy apply start reason=$reason allowedApps=${allowedApps.size} kioskMode=$kioskMode")
+        if (!isDeviceOwner()) {
+            Log.i(tag, "runtime kiosk policy apply skip reason=not_device_owner source=$reason")
+            return PolicyApplyOutcome(
+                status = "FAILED",
+                error = "Device is not owner, runtime kiosk policy cannot be applied",
+                errorCode = "POLICY_NOT_DEVICE_OWNER"
+            )
+        }
+
+        val homeOutcome = ensureLauncherHomeApplied(reason)
+        val desiredPackages = (listOf(launcherPackage, selfPackage) + allowedApps)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toTypedArray()
+
+        val currentPackages = runCatching { dpm.getLockTaskPackages(admin).toSet() }
+            .onFailure { Log.w(tag, "runtime kiosk policy read lockTaskPackages failed reason=$reason", it) }
+            .getOrDefault(emptySet())
+        val desiredSet = desiredPackages.toSet()
+        val lockTaskReady = desiredSet.all { it in currentPackages }
+
+        return runCatching {
+            if (lockTaskReady) {
+                Log.i(tag, "runtime kiosk policy lockTaskPackages skip reason=already_contains_desired source=$reason desired=${desiredSet.size}")
+            } else {
+                setLockTaskPackagesStrict(desiredPackages)
+                applyLockTaskFeaturesStrict(kioskMode = kioskMode, lockedMode = false)
+                Log.i(tag, "runtime kiosk policy lockTaskPackages success reason=$reason desired=${desiredSet.size}")
+            }
+
+            when {
+                homeOutcome.status == "FAILED" -> homeOutcome
+                !lockTaskReady && !isLockTaskPermitted(selfPackage) -> PolicyApplyOutcome(
+                    status = "PARTIAL",
+                    error = "Lock task package allowlist was applied but launcher is not permitted yet",
+                    errorCode = "LOCK_TASK_NOT_ALLOWED"
+                )
+                homeOutcome.status == "PARTIAL" -> homeOutcome
+                else -> PolicyApplyOutcome(status = "SUCCESS")
+            }
+        }.getOrElse { err ->
+            Log.w(tag, "runtime kiosk policy apply failed reason=$reason", err)
+            PolicyApplyOutcome(
+                status = "FAILED",
+                error = err.message ?: "Runtime kiosk policy apply failed",
+                errorCode = "RUNTIME_KIOSK_POLICY_FAILED"
+            )
+        }
+    }
+
     fun clearPersistentPreferredActivities() {
         runCatching { dpm.clearPackagePersistentPreferredActivities(admin, selfPackage) }
             .onFailure { Log.w(tag, "clearPersistentPreferredActivities failed", it) }
