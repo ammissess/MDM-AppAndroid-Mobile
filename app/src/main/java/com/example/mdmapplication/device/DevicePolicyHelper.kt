@@ -1,5 +1,6 @@
 package com.example.mdmapplication.device
 
+import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
@@ -35,6 +36,12 @@ class DevicePolicyHelper(private val context: Context) {
         val success: Boolean,
         val error: String? = null,
         val errorCode: String? = null
+    )
+
+    data class RuntimePermissionGrantOutcome(
+        val fineLocationApplied: Boolean,
+        val coarseLocationApplied: Boolean,
+        val reason: String
     )
 
     private data class UsbDataSignalingOutcome(
@@ -185,6 +192,49 @@ class DevicePolicyHelper(private val context: Context) {
         runCatching { dpm.isDeviceOwnerApp(selfPackage) }
             .onFailure { Log.w(tag, "isDeviceOwner failed", it) }
             .getOrDefault(false)
+
+    fun ensureLocationPermissionsGranted(): RuntimePermissionGrantOutcome {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return RuntimePermissionGrantOutcome(
+                fineLocationApplied = true,
+                coarseLocationApplied = true,
+                reason = "pre_runtime_permissions"
+            )
+        }
+
+        if (!isDeviceOwner()) {
+            Log.i(tag, "location permission grant skipped reason=not_device_owner package=$selfPackage")
+            return RuntimePermissionGrantOutcome(
+                fineLocationApplied = false,
+                coarseLocationApplied = false,
+                reason = "not_device_owner"
+            )
+        }
+
+        val fineApplied = grantRuntimePermission(Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarseApplied = grantRuntimePermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+        Log.i(
+            tag,
+            "location permission grant result package=$selfPackage fineApplied=$fineApplied coarseApplied=$coarseApplied"
+        )
+        return RuntimePermissionGrantOutcome(
+            fineLocationApplied = fineApplied,
+            coarseLocationApplied = coarseApplied,
+            reason = "device_owner_policy"
+        )
+    }
+
+    private fun grantRuntimePermission(permission: String): Boolean =
+        runCatching {
+            dpm.setPermissionGrantState(
+                admin,
+                selfPackage,
+                permission,
+                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+            )
+        }.onFailure {
+            Log.w(tag, "grantRuntimePermission failed permission=$permission package=$selfPackage", it)
+        }.getOrDefault(false)
 
     fun isLockTaskPermitted(packageName: String = selfPackage): Boolean =
         runCatching { dpm.isLockTaskPermitted(packageName) }

@@ -24,6 +24,8 @@ $safeSerialForLog = $Serial -replace "[^A-Za-z0-9_.-]", "_"
 $emulatorStdoutLog = Join-Path $logRoot "mdm-emulator-provisioning-$safeSerialForLog.out.log"
 $emulatorStderrLog = Join-Path $logRoot "mdm-emulator-provisioning-$safeSerialForLog.err.log"
 $emulatorAvdHome = $null
+$script:emulatorProcessId = 0
+$script:emulatorLaunchArgs = @()
 $androidStudioAvdHome = "C:\Users\ADMIN\.android\avd"
 $androidEnvNames = @(
     "HOME",
@@ -125,8 +127,9 @@ function Invoke-AdbCaptured {
         if ($null -eq $stderr) {
             $stderr = ""
         }
+        $exitCode = if ($null -eq $process.ExitCode) { 0 } else { $process.ExitCode }
         return [pscustomobject]@{
-            ExitCode = $process.ExitCode
+            ExitCode = $exitCode
             Stdout = ([string]$stdout).Trim()
             Stderr = ([string]$stderr).Trim()
         }
@@ -148,6 +151,164 @@ function Format-CapturedValue {
         return "<empty>"
     }
     return $Value
+}
+
+function Test-HasPackagePathLine {
+    param([string]$Stdout)
+
+    if ([string]::IsNullOrWhiteSpace($Stdout)) {
+        return $false
+    }
+
+    return ([string]$Stdout).Trim() -match "(?m)^package:"
+}
+
+function Get-SerialPorts {
+    if ($Serial -notmatch "^emulator-(\d+)$") {
+        return @()
+    }
+
+    $consolePort = [int]$Matches[1]
+    return @($consolePort, $consolePort + 1)
+}
+
+function Test-ProcessAlive {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return $false
+    }
+
+    try {
+        return $null -ne (Get-Process -Id $ProcessId -ErrorAction Stop)
+    } catch {
+        return $false
+    }
+}
+
+function Get-QemuProcessesForLaunchedEmulator {
+    $rows = @()
+    try {
+        $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.Name -like "qemu-system*" })
+    } catch {
+        return @()
+    }
+
+    if ($script:emulatorProcessId -gt 0) {
+        $children = @($rows | Where-Object { $_.ParentProcessId -eq $script:emulatorProcessId })
+        if ($children.Count -gt 0) {
+            return $children
+        }
+    }
+
+    return $rows
+}
+
+function Get-RuntimeProcessSnapshotText {
+    $rows = @()
+    try {
+        $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.Name -match "^(adb|emulator|qemu-system)" -or
+            ($script:emulatorProcessId -gt 0 -and ($_.ProcessId -eq $script:emulatorProcessId -or $_.ParentProcessId -eq $script:emulatorProcessId))
+        })
+    } catch {
+        return "process snapshot unavailable: $($_.Exception.Message)"
+    }
+
+    if ($rows.Count -eq 0) {
+        return "<no adb/emulator/qemu processes>"
+    }
+
+    return (($rows | Sort-Object ProcessId | ForEach-Object {
+        "pid=$($_.ProcessId) name=$($_.Name) parent=$($_.ParentProcessId) cmd=$($_.CommandLine)"
+    }) -join "`n")
+}
+
+function Get-PortUsageSnapshotText {
+    $ports = @(Get-SerialPorts)
+    if ($ports.Count -eq 0) {
+        return "<serial is not an emulator port serial>"
+    }
+
+    if ($null -eq (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
+        return "<Get-NetTCPConnection unavailable>"
+    }
+
+    $connections = @(Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue)
+    if ($connections.Count -eq 0) {
+        return "<no listeners or connections on ports $($ports -join ', ')>"
+    }
+
+    return (($connections | Sort-Object LocalPort, State, OwningProcess | ForEach-Object {
+        $ownerName = "<unknown>"
+        try {
+            $owner = Get-Process -Id $_.OwningProcess -ErrorAction Stop
+            $ownerName = $owner.ProcessName
+        } catch {
+        }
+        "local=$($_.LocalAddress):$($_.LocalPort) remote=$($_.RemoteAddress):$($_.RemotePort) state=$($_.State) owner=$($_.OwningProcess)($ownerName)"
+    }) -join "`n")
+}
+
+function Get-LogTailText {
+    param(
+        [string]$Path,
+        [int]$Lines = 80
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return "<not configured>"
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return "<missing: $Path>"
+    }
+
+    $content = @(Get-Content -LiteralPath $Path -Tail $Lines -ErrorAction SilentlyContinue)
+    if ($content.Count -eq 0) {
+        return "<empty>"
+    }
+
+    return (($content | Out-String).Trim())
+}
+
+function Write-EmulatorRuntimeDiagnostics {
+    param([string]$Reason)
+
+    Write-Host ""
+    Write-Host "== Emulator runtime diagnostics =="
+    Write-Host "reason: $Reason"
+    Write-Host "serial: $Serial"
+    Write-Host "avd name: $(if ([string]::IsNullOrWhiteSpace($AvdName)) { '<not provided>' } else { $AvdName })"
+    Write-Host "emulator pid: $(if ($script:emulatorProcessId -gt 0) { $script:emulatorProcessId } else { '<not launched by this run>' })"
+    if ($script:emulatorProcessId -gt 0) {
+        Write-Host "emulator pid alive: $(Test-ProcessAlive $script:emulatorProcessId)"
+    }
+    Write-Host "emulator args: $(if ($script:emulatorLaunchArgs.Count -gt 0) { $script:emulatorLaunchArgs -join ' ' } else { '<none>' })"
+
+    $devicesResult = Invoke-AdbCaptured -Arguments @("devices", "-l") -TimeoutSeconds 15
+    Write-Host ""
+    Write-Host "adb devices -l:"
+    Write-Host (Format-CapturedValue $devicesResult.Stdout)
+    if ($devicesResult.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($devicesResult.Stderr)) {
+        Write-Host "adb devices stderr:"
+        Write-Host (Format-CapturedValue $devicesResult.Stderr)
+    }
+
+    Write-Host ""
+    Write-Host "process snapshot:"
+    Write-Host (Get-RuntimeProcessSnapshotText)
+
+    Write-Host ""
+    Write-Host "port snapshot:"
+    Write-Host (Get-PortUsageSnapshotText)
+
+    Write-Host ""
+    Write-Host "emulator stdout log: $emulatorStdoutLog"
+    Write-Host (Get-LogTailText -Path $emulatorStdoutLog)
+
+    Write-Host ""
+    Write-Host "emulator stderr log: $emulatorStderrLog"
+    Write-Host (Get-LogTailText -Path $emulatorStderrLog)
 }
 
 function Require-ExitCode {
@@ -383,6 +544,8 @@ function Start-ProvisioningEmulator {
         $args += @("-port", $Matches[1])
     }
 
+    Wait-EmulatorPortRelease -TimeoutSeconds 15
+
     if ($WithWipe) {
         Write-Host "starting clean emulator..."
     } else {
@@ -397,31 +560,50 @@ function Start-ProvisioningEmulator {
 
     Remove-Item -LiteralPath $emulatorStdoutLog, $emulatorStderrLog -ErrorAction SilentlyContinue
     Restore-AndroidEnvironment
+    $startedProcess = $null
     if (
         -not [string]::IsNullOrWhiteSpace($script:emulatorAvdHome) -and
         (Get-Command Start-Process).Parameters.ContainsKey("Environment")
     ) {
-        Start-Process -FilePath $emulator `
+        $startedProcess = Start-Process -FilePath $emulator `
             -ArgumentList $args `
             -RedirectStandardOutput $emulatorStdoutLog `
             -RedirectStandardError $emulatorStderrLog `
             -WindowStyle Hidden `
-            -Environment @{ ANDROID_AVD_HOME = $script:emulatorAvdHome } | Out-Null
+            -Environment @{ ANDROID_AVD_HOME = $script:emulatorAvdHome } `
+            -PassThru
     } else {
         $previousAvdHome = [Environment]::GetEnvironmentVariable("ANDROID_AVD_HOME", "Process")
         try {
             if (-not [string]::IsNullOrWhiteSpace($script:emulatorAvdHome)) {
                 Set-ProcessEnvironmentVariable -Name "ANDROID_AVD_HOME" -Value $script:emulatorAvdHome
             }
-            Start-Process -FilePath $emulator `
+            $startedProcess = Start-Process -FilePath $emulator `
                 -ArgumentList $args `
                 -RedirectStandardOutput $emulatorStdoutLog `
                 -RedirectStandardError $emulatorStderrLog `
-                -WindowStyle Hidden | Out-Null
+                -WindowStyle Hidden `
+                -PassThru
         } finally {
             Set-ProcessEnvironmentVariable -Name "ANDROID_AVD_HOME" -Value $previousAvdHome
             Restore-AndroidEnvironment
         }
+    }
+
+    if ($null -eq $startedProcess) {
+        Write-EmulatorRuntimeDiagnostics -Reason "EMULATOR_PROCESS_NOT_RETURNED"
+        Stop-WithMessage "emulator.exe did not return a process handle after launch."
+    }
+
+    $script:emulatorProcessId = $startedProcess.Id
+    $script:emulatorLaunchArgs = $args
+    Write-Host "Emulator PID: $script:emulatorProcessId"
+
+    $qemuProcesses = @(Get-QemuProcessesForLaunchedEmulator)
+    if ($qemuProcesses.Count -gt 0) {
+        Write-Host "QEMU PID(s): $((@($qemuProcesses | ForEach-Object { $_.ProcessId })) -join ', ')"
+    } else {
+        Write-Host "QEMU PID(s): <not observed yet>"
     }
 
     if ($WithWipe) {
@@ -459,12 +641,19 @@ function Wait-EmulatorPortRelease {
     }
 
     while ((Get-Date) -lt $deadline) {
-        $connections = @(Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue)
+        $connections = @(Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Where-Object {
+            $_.State -ne "TimeWait" -and
+            $_.State -ne "Closed" -and
+            ($_.OwningProcess -ne 0 -or $_.State -eq "Listen")
+        })
         if ($connections.Count -eq 0) {
             return
         }
         Start-Sleep -Seconds 1
     }
+
+    Write-EmulatorRuntimeDiagnostics -Reason "EMULATOR_PORTS_STILL_BOUND"
+    Stop-WithMessage "Emulator ports $($ports -join ', ') are still bound after ${TimeoutSeconds}s. A stale emulator/qemu process or another emulator instance is holding the target serial ports."
 }
 
 function Stop-RunningEmulatorForWipe {
@@ -529,7 +718,7 @@ function Test-AdbReadyRecheck {
         $bootResult.ExitCode -eq 0 -and $bootCompleted -eq "1" -and
         $devBootResult.ExitCode -eq 0 -and
         ([string]::IsNullOrWhiteSpace($devBootComplete) -or $devBootComplete -eq "1") -and
-        $pmResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($pmResult.Stdout) -and
+        ($pmResult.ExitCode -eq 0) -and (Test-HasPackagePathLine -Stdout $pmResult.Stdout) -and
         $settingsResult.ExitCode -eq 0
     )
 }
@@ -538,7 +727,20 @@ function Invoke-WaitAdb {
     $waitAdbScript = Join-Path $PSScriptRoot "wait-adb.ps1"
     Restore-AndroidEnvironment
     try {
-        & $waitAdbScript -Serial $Serial -TimeoutSeconds 1200 -SdkRoot $SdkRoot
+        $waitArgs = @{
+            Serial = $Serial
+            TimeoutSeconds = 1200
+            SdkRoot = $SdkRoot
+        }
+
+        if ($script:emulatorProcessId -gt 0) {
+            $waitArgs.EmulatorPid = $script:emulatorProcessId
+            $waitArgs.EmulatorStdoutLog = $emulatorStdoutLog
+            $waitArgs.EmulatorStderrLog = $emulatorStderrLog
+            $waitArgs.QemuStartupTimeoutSeconds = 90
+        }
+
+        & $waitAdbScript @waitArgs
         Require-ExitCode "wait-adb.ps1"
     } catch {
         $waitError = $_.Exception.Message
@@ -549,6 +751,10 @@ function Invoke-WaitAdb {
         }
 
         $result.Adb = "wait-adb failed"
+        if ($script:emulatorProcessId -gt 0 -and -not (Test-ProcessAlive $script:emulatorProcessId)) {
+            $result.AvdBoot = "emulator process exited pid=$script:emulatorProcessId"
+        }
+        Write-EmulatorRuntimeDiagnostics -Reason "WAIT_ADB_FAILED"
         Stop-WithMessage "Timed out waiting for adb device '$Serial'. $waitError"
     }
 }
@@ -630,13 +836,13 @@ function Get-OwnersText {
 function Confirm-OwnerPackageReadyAfterInstall {
     Write-Host "Verifying installed package path..."
     $packagePathResult = Invoke-AdbCaptured -Arguments @("-s", $Serial, "shell", "pm", "path", $ownerPackage)
-    if ($packagePathResult.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($packagePathResult.Stdout)) {
+    if (-not (Test-HasPackagePathLine -Stdout $packagePathResult.Stdout)) {
         $result.ApkInstall = "pm path verification failed"
         $packagePathExit = if ($packagePathResult.ExitCode -ne 0) { $packagePathResult.ExitCode } else { 1 }
         Stop-WithMessage "APK install succeeded, but 'pm path $ownerPackage' failed. stdout: $(Format-CapturedValue $packagePathResult.Stdout) stderr: $(Format-CapturedValue $packagePathResult.Stderr)" $packagePathExit
     }
     Write-Host "pm path ${ownerPackage}:"
-    Write-Host $packagePathResult.Stdout
+    Write-Host ([string]$packagePathResult.Stdout).Trim()
 
     Start-Sleep -Seconds 5
 

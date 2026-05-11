@@ -1446,8 +1446,32 @@ class LauncherViewModel : ViewModel() {
                             Manifest.permission.ACCESS_COARSE_LOCATION
                         ) == PackageManager.PERMISSION_GRANTED
 
-                        if (!hasFineLocation && !hasCoarseLocation) {
-                            Log.i(tag, "location report skipped reason=no_location_permission deviceCode=$deviceCode")
+                        val grantOutcome = if (!hasFineLocation || !hasCoarseLocation) {
+                            DevicePolicyHelper(context).ensureLocationPermissionsGranted()
+                        } else {
+                            null
+                        }
+                        val hasFineLocationAfterPolicy = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                        val hasCoarseLocationAfterPolicy = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (grantOutcome != null) {
+                            Log.i(
+                                tag,
+                                "location permission gate deviceCode=$deviceCode fineBefore=$hasFineLocation coarseBefore=$hasCoarseLocation fineAfter=$hasFineLocationAfterPolicy coarseAfter=$hasCoarseLocationAfterPolicy grantReason=${grantOutcome.reason} fineApplied=${grantOutcome.fineLocationApplied} coarseApplied=${grantOutcome.coarseLocationApplied}"
+                            )
+                        }
+
+                        if (!hasFineLocationAfterPolicy && !hasCoarseLocationAfterPolicy) {
+                            Log.i(
+                                tag,
+                                "location report skipped reason=no_location_permission deviceCode=$deviceCode fineGranted=$hasFineLocationAfterPolicy coarseGranted=$hasCoarseLocationAfterPolicy"
+                            )
                             delay(60_000L)
                             continue
                         }
@@ -1478,10 +1502,18 @@ class LauncherViewModel : ViewModel() {
                         )
 
                         val token = getOrRefreshToken(deviceCode)
-                        api.updateLocation(token = token, req = req)
                         Log.i(
                             tag,
-                            "location report sent deviceCode=$deviceCode provider=${validFix.provider} accuracyMeters=${validFix.accuracyMeters}"
+                            "location upload request method=POST path=/api/device/location auth=Bearer<redacted> deviceCode=${req.deviceCode} latitude=${req.latitude} longitude=${req.longitude} accuracyMeters=${req.accuracyMeters}"
+                        )
+                        val response = api.updateLocation(token = token, req = req)
+                        Log.i(
+                            tag,
+                            "location upload response path=/api/device/location body=$response"
+                        )
+                        Log.i(
+                            tag,
+                            "location report sent deviceCode=$deviceCode provider=${validFix.provider} latitude=${validFix.latitude} longitude=${validFix.longitude} accuracyMeters=${validFix.accuracyMeters}"
                         )
                     } catch (e: MdmApi.ApiException) {
                         if (isDeviceCodeMismatch(e)) clearToken()
