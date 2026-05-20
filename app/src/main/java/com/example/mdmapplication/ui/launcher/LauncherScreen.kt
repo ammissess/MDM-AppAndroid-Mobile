@@ -18,41 +18,31 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.mdmapplication.BuildConfig
 import com.example.mdmapplication.model.LauncherApp
 import com.google.accompanist.drawablepainter.rememberDrawablePainter
 
-private val LauncherBgTop = Color(0xFF07101C)
-private val LauncherBgMid = Color(0xFF0A1424)
-private val LauncherBgBottom = Color(0xFF050A12)
-private val LauncherGlass = Color(0xAA121C2B)
-private val LauncherCard = Color(0xB0142031)
+private val LauncherScrim = Color.Black.copy(alpha = 0.10f)
+private val LauncherGlass = Color(0x66121C2B)
+private val LauncherCard = Color(0x80142031)
 private val LauncherBorder = Color.White.copy(alpha = 0.12f)
 private val LauncherText = Color(0xFFF2F7FF)
 private val LauncherMuted = Color(0xFFAAB7CC)
@@ -61,24 +51,26 @@ private val LauncherAccentSoft = Color(0xFFB8E2FF)
 
 @Composable
 fun LauncherScreen(
+    language: AppLanguage,
     apps: List<LauncherApp>,
     isDeviceOwner: Boolean,
+    deviceCode: String,
+    deviceDisplayName: String,
     onAppClick: (String) -> Unit,
     onClearPersistentHome: () -> Unit,
     onApplyKioskHome: () -> Unit,
     onExitLockTask: () -> Unit
 ) {
-    var devMenuExpanded by remember { mutableStateOf(false) }
-
-    Box(modifier = Modifier.fillMaxSize()) {
+    val strings = launcherStrings(language)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(LauncherScrim)
+    ) {
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(LauncherBgTop, LauncherBgMid, LauncherBgBottom)
-                    )
-                )
+                .background(Color.Transparent)
         )
 
         Column(
@@ -91,91 +83,32 @@ fun LauncherScreen(
         ) {
             Surface(
                 color = LauncherGlass,
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, LauncherBorder, RoundedCornerShape(28.dp))
+                    .border(1.dp, LauncherBorder, RoundedCornerShape(16.dp))
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = "MDM Launcher",
-                                color = LauncherText,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (isDeviceOwner) {
-                                    "Thiết bị đang ở chế độ quản trị và launcher đang kiểm soát truy cập ứng dụng."
-                                } else {
-                                    "Thiết bị chưa ở chế độ Device Owner. Một số chính sách kiosk có thể chưa được áp dụng."
-                                },
-                                color = LauncherMuted,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-
-                        if (BuildConfig.DEBUG) {
-                            Box {
-                                TextButton(
-                                    onClick = { devMenuExpanded = true }
-                                ) {
-                                    Text("DEV", color = LauncherAccent)
-                                }
-
-                                DropdownMenu(
-                                    expanded = devMenuExpanded,
-                                    onDismissRequest = { devMenuExpanded = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Exit LockTask") },
-                                        onClick = {
-                                            devMenuExpanded = false
-                                            onExitLockTask()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Clear persistent HOME") },
-                                        enabled = isDeviceOwner,
-                                        onClick = {
-                                            devMenuExpanded = false
-                                            onClearPersistentHome()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Apply kiosk policy now") },
-                                        enabled = isDeviceOwner,
-                                        onClick = {
-                                            devMenuExpanded = false
-                                            onApplyKioskHome()
-                                        }
-                                    )
-                                }
-                            }
-                        }
+                    InfoChip(
+                        text = deviceCode.ifBlank { "UNKNOWN" },
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isDeviceOwner) {
+                        InfoChip(text = strings.managed)
                     }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        InfoChip(text = if (isDeviceOwner) "Managed" else "Unmanaged")
-                        InfoChip(text = "${apps.size} apps")
-                        if (BuildConfig.DEBUG) {
-                            InfoChip(text = "DEBUG")
-                        }
+                    if (deviceDisplayName.isNotBlank()) {
+                        Text(
+                            text = deviceDisplayName,
+                            color = LauncherMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
             }
@@ -183,11 +116,11 @@ fun LauncherScreen(
             if (apps.isEmpty()) {
                 Surface(
                     color = LauncherGlass,
-                    shape = RoundedCornerShape(28.dp),
+                    shape = RoundedCornerShape(20.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .border(1.dp, LauncherBorder, RoundedCornerShape(28.dp))
+                        .border(1.dp, LauncherBorder, RoundedCornerShape(20.dp))
                 ) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -199,12 +132,12 @@ fun LauncherScreen(
                             modifier = Modifier.padding(24.dp)
                         ) {
                             Text(
-                                text = "Chưa có ứng dụng khả dụng",
+                                text = strings.noAppsTitle,
                                 color = LauncherText,
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = "Chờ backend trả allowedApps hoặc kiểm tra profile liên kết với thiết bị.",
+                                text = strings.noAppsDesc,
                                 color = LauncherMuted,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -232,11 +165,14 @@ fun LauncherScreen(
 }
 
 @Composable
-private fun InfoChip(text: String) {
+private fun InfoChip(
+    text: String,
+    modifier: Modifier = Modifier
+) {
     Surface(
         color = LauncherAccent.copy(alpha = 0.12f),
         shape = RoundedCornerShape(999.dp),
-        modifier = Modifier.border(
+        modifier = modifier.border(
             width = 1.dp,
             color = LauncherAccent.copy(alpha = 0.22f),
             shape = RoundedCornerShape(999.dp)
@@ -246,9 +182,219 @@ private fun InfoChip(text: String) {
             text = text,
             color = LauncherAccentSoft,
             style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
         )
     }
+}
+
+@Composable
+fun MdmDeviceInfoScreen(
+    language: AppLanguage,
+    deviceCode: String,
+    deviceDisplayName: String,
+    ownerLabel: String?,
+    lastConfigSyncAtEpochMillis: Long?,
+    isDeviceOwner: Boolean,
+    profileLinked: Boolean,
+    adminLocked: Boolean,
+    onLanguageChange: (AppLanguage) -> Unit,
+    onBack: () -> Unit
+) {
+    val strings = launcherStrings(language)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(LauncherScrim)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = LauncherGlass,
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 520.dp)
+                .border(1.dp, LauncherBorder, RoundedCornerShape(20.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = strings.deviceInfo,
+                    color = LauncherText,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                InfoRow(strings.deviceCode, deviceCode.ifBlank { "UNKNOWN" })
+                InfoRow(strings.deviceName, deviceDisplayName.ifBlank { strings.noData })
+                InfoRow(strings.owner, ownerLabel?.takeIf { it.isNotBlank() } ?: strings.noData)
+                InfoRow(strings.connectionStatus, connectionStatusText(language, lastConfigSyncAtEpochMillis))
+                InfoRow(strings.mdmStatus, mdmStatusText(language, isDeviceOwner, profileLinked, adminLocked))
+
+                Text(
+                    text = strings.changeLanguage,
+                    color = LauncherMuted,
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LanguageButton(
+                        text = "Tiếng Việt",
+                        selected = language == AppLanguage.VI,
+                        onClick = { onLanguageChange(AppLanguage.VI) }
+                    )
+                    LanguageButton(
+                        text = "English",
+                        selected = language == AppLanguage.EN,
+                        onClick = { onLanguageChange(AppLanguage.EN) }
+                    )
+                }
+
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = LauncherAccent,
+                        contentColor = Color(0xFF07111E)
+                    )
+                ) {
+                    Text(strings.backToLauncher)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = label,
+            color = LauncherMuted,
+            style = MaterialTheme.typography.labelMedium
+        )
+        Text(
+            text = value,
+            color = LauncherText,
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun LanguageButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) LauncherAccent else Color.White.copy(alpha = 0.10f),
+            contentColor = if (selected) Color(0xFF07111E) else LauncherText
+        )
+    ) {
+        Text(text)
+    }
+}
+
+private data class LauncherStrings(
+    val managed: String,
+    val noAppsTitle: String,
+    val noAppsDesc: String,
+    val deviceCode: String,
+    val deviceName: String,
+    val deviceInfo: String,
+    val owner: String,
+    val connectionStatus: String,
+    val justSynced: String,
+    val offline: String,
+    val connecting: String,
+    val mdmStatus: String,
+    val deviceOwnerActive: String,
+    val deviceOwnerInactive: String,
+    val profileLinked: String,
+    val profileNotLinked: String,
+    val adminLocked: String,
+    val changeLanguage: String,
+    val backToLauncher: String,
+    val noData: String
+)
+
+private fun launcherStrings(language: AppLanguage): LauncherStrings =
+    when (language) {
+        AppLanguage.VI -> LauncherStrings(
+            managed = "MDM quản trị",
+            noAppsTitle = "Chưa có ứng dụng khả dụng",
+            noAppsDesc = "Chờ backend trả allowedApps hoặc kiểm tra profile liên kết với thiết bị.",
+            deviceCode = "Mã thiết bị",
+            deviceName = "Tên thiết bị",
+            deviceInfo = "Thông tin thiết bị",
+            owner = "Chủ quản lý thiết bị",
+            connectionStatus = "Trạng thái kết nối",
+            justSynced = "Vừa đồng bộ",
+            offline = "Mất kết nối",
+            connecting = "Đang kết nối",
+            mdmStatus = "Trạng thái MDM",
+            deviceOwnerActive = "Device Owner active",
+            deviceOwnerInactive = "Device Owner inactive",
+            profileLinked = "Profile linked",
+            profileNotLinked = "Profile not linked",
+            adminLocked = "Admin locked",
+            changeLanguage = "Đổi ngôn ngữ",
+            backToLauncher = "Quay lại launcher",
+            noData = "Không có dữ liệu"
+        )
+
+        AppLanguage.EN -> LauncherStrings(
+            managed = "Managed by MDM",
+            noAppsTitle = "No apps available",
+            noAppsDesc = "Waiting for allowedApps from the backend or a linked profile.",
+            deviceCode = "Device code",
+            deviceName = "Device name",
+            deviceInfo = "Device information",
+            owner = "Device owner",
+            connectionStatus = "Connection status",
+            justSynced = "Recently synced",
+            offline = "Offline",
+            connecting = "Connecting",
+            mdmStatus = "MDM status",
+            deviceOwnerActive = "Device Owner active",
+            deviceOwnerInactive = "Device Owner inactive",
+            profileLinked = "Profile linked",
+            profileNotLinked = "Profile not linked",
+            adminLocked = "Admin locked",
+            changeLanguage = "Change language",
+            backToLauncher = "Back to launcher",
+            noData = "No data"
+        )
+    }
+
+private fun connectionStatusText(language: AppLanguage, lastSyncAt: Long?): String {
+    val strings = launcherStrings(language)
+    val syncAt = lastSyncAt ?: return strings.connecting
+    val ageMs = System.currentTimeMillis() - syncAt
+    return if (ageMs <= 10 * 60 * 1000L) strings.justSynced else strings.offline
+}
+
+private fun mdmStatusText(
+    language: AppLanguage,
+    isDeviceOwner: Boolean,
+    profileLinked: Boolean,
+    adminLocked: Boolean
+): String {
+    val strings = launcherStrings(language)
+    return listOf(
+        if (isDeviceOwner) strings.deviceOwnerActive else strings.deviceOwnerInactive,
+        if (profileLinked) strings.profileLinked else strings.profileNotLinked,
+        if (adminLocked) strings.adminLocked else null
+    ).filterNotNull().joinToString(" · ")
 }
 
 

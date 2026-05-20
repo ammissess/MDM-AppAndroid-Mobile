@@ -1,6 +1,7 @@
 package com.example.mdmapplication.device
 
 import android.content.Context
+import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import com.example.mdmapplication.BuildConfig
@@ -25,6 +26,10 @@ object DeviceRuntimeIdentity {
     private const val KEY_PENDING_FCM_TOKEN = "pending_fcm_token"
     private const val KEY_PENDING_FCM_TOKEN_UPDATED_AT = "pending_fcm_token_updated_at"
     private const val TAG = "DeviceRuntimeIdentity"
+    private val EMULATOR_NAME_PROPS = listOf(
+        "ro.boot.qemu.avd_name",
+        "ro.kernel.qemu.avd_name"
+    )
 
     data class PendingFcmToken(
         val token: String,
@@ -64,6 +69,34 @@ object DeviceRuntimeIdentity {
             "getDeviceCode source default=$fromDefault deviceProtected=$fromDeviceProtected selected=$selected"
         )
         return selected
+    }
+
+    fun getDeviceDisplayName(): String {
+        val emulatorName = EMULATOR_NAME_PROPS
+            .asSequence()
+            .mapNotNull { readSystemProperty(it) }
+            .map { it.replace('_', ' ').trim() }
+            .firstOrNull { it.isNotEmpty() }
+
+        if (!emulatorName.isNullOrBlank()) return emulatorName
+
+        val model = Build.MODEL?.trim().orEmpty()
+        val manufacturer = Build.MANUFACTURER?.trim().orEmpty()
+        if (model.isBlank() && manufacturer.isBlank()) return "Android Device"
+        if (manufacturer.isBlank()) return model
+        if (model.isBlank()) return manufacturer
+        return if (model.startsWith(manufacturer, ignoreCase = true)) model else "$manufacturer $model"
+    }
+
+    private fun readSystemProperty(key: String): String? {
+        return runCatching {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val getMethod = clazz.getMethod("get", String::class.java)
+            getMethod.invoke(null, key) as? String
+        }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     }
 
     fun stagePendingFcmToken(context: Context, token: String, updatedAtEpochMillis: Long) {

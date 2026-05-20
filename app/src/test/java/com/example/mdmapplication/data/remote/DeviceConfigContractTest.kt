@@ -3,6 +3,7 @@ package com.example.mdmapplication.data.remote
 import com.example.mdmapplication.ui.launcher.LauncherViewModel
 import com.example.mdmapplication.ui.launcher.DeviceLockState
 import com.example.mdmapplication.ui.launcher.LauncherUiState
+import com.example.mdmapplication.ui.launcher.LockOverlayReason
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -185,11 +186,65 @@ class DeviceConfigContractTest {
     }
 
     @Test
-    fun configSourceCommandWhileLocked_shouldStayLocked() {
+    fun unlockAlreadyUnlockedWhileCommandScreenLocked_shouldClearCommandLock() {
+        val viewModel = LauncherViewModel()
+        viewModel.debugSetStateForTest(
+            LauncherUiState(
+                lockState = DeviceLockState.LOCKED,
+                noProfileLocked = false,
+                commandScreenLocked = true,
+                lockReason = LauncherViewModel.COMMAND_SCREEN_LOCKED_MESSAGE,
+                lockContainmentStatus = "FULL"
+            )
+        )
+
+        val shouldLoadConfig = viewModel.debugApplyUnlockResponseForTest(
+            status = "ACTIVE",
+            message = "Already unlocked"
+        )
+
+        val state = viewModel.state.value
+        assertEquals(true, shouldLoadConfig)
+        assertEquals(DeviceLockState.ACTIVE, state.lockState)
+        assertEquals(false, state.commandScreenLocked)
+        assertEquals(null, state.unlockError)
+        assertEquals(false, state.lockOverlayActive)
+        assertEquals(null, state.lockOverlayReason)
+    }
+
+    @Test
+    fun launcherUiState_shouldPrioritizeAdminOverlayOverCommandLock() {
+        val state = LauncherUiState(
+            lockState = DeviceLockState.LOCKED,
+            adminLocked = true,
+            commandScreenLocked = true,
+            noProfileLocked = true
+        )
+
+        assertEquals(true, state.lockOverlayActive)
+        assertEquals(LockOverlayReason.ADMIN_LOCK, state.lockOverlayReason)
+    }
+
+    @Test
+    fun launcherUiState_shouldExposeCommandOverlaySeparatelyFromAdminLock() {
+        val state = LauncherUiState(
+            lockState = DeviceLockState.LOCKED,
+            adminLocked = false,
+            commandScreenLocked = true
+        )
+
+        assertEquals(true, state.lockOverlayActive)
+        assertEquals(LockOverlayReason.COMMAND_LOCK_SCREEN, state.lockOverlayReason)
+    }
+
+    @Test
+    fun configSourceCommandWhileCommandScreenLocked_shouldStayLockedUntilPasswordUnlock() {
         val viewModel = LauncherViewModel()
         val method = LauncherViewModel::class.java.getDeclaredMethod(
             "shouldStayLockedOnConfigUpdate",
             DeviceLockState::class.java,
+            java.lang.Boolean.TYPE,
+            java.lang.Boolean.TYPE,
             java.lang.Boolean.TYPE,
             String::class.java
         ).apply { isAccessible = true }
@@ -198,10 +253,12 @@ class DeviceConfigContractTest {
             viewModel,
             DeviceLockState.LOCKED,
             false,
+            false,
+            true,
             "command:refresh_config"
         ) as Boolean
 
-        assertTrue(shouldStayLocked)
+        assertEquals(true, shouldStayLocked)
     }
 
     @Test
@@ -211,12 +268,40 @@ class DeviceConfigContractTest {
             "shouldStayLockedOnConfigUpdate",
             DeviceLockState::class.java,
             java.lang.Boolean.TYPE,
+            java.lang.Boolean.TYPE,
+            java.lang.Boolean.TYPE,
             String::class.java
         ).apply { isAccessible = true }
 
         val shouldStayLocked = method.invoke(
             viewModel,
             DeviceLockState.LOCKED,
+            true,
+            false,
+            false,
+            "refresh"
+        ) as Boolean
+
+        assertEquals(false, shouldStayLocked)
+    }
+
+    @Test
+    fun configSourceRefreshWhileAdminLocked_shouldFollowServerAdminLockState() {
+        val viewModel = LauncherViewModel()
+        val method = LauncherViewModel::class.java.getDeclaredMethod(
+            "shouldStayLockedOnConfigUpdate",
+            DeviceLockState::class.java,
+            java.lang.Boolean.TYPE,
+            java.lang.Boolean.TYPE,
+            java.lang.Boolean.TYPE,
+            String::class.java
+        ).apply { isAccessible = true }
+
+        val shouldStayLocked = method.invoke(
+            viewModel,
+            DeviceLockState.LOCKED,
+            false,
+            true,
             true,
             "refresh"
         ) as Boolean

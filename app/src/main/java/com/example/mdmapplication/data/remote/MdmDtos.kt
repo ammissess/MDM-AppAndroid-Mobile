@@ -66,7 +66,11 @@ data class DeviceConfigResponse(
     val disableUsbDataSignaling: Boolean,
     val disallowSafeBoot: Boolean,
     val disallowFactoryReset: Boolean,
-    val configVersionEpochMillis: Long
+    val configVersionEpochMillis: Long,
+    val adminLocked: Boolean = false,
+    val adminLockReason: String? = null,
+    val adminLockedAtEpochMillis: Long? = null,
+    val adminUnlockedAtEpochMillis: Long? = null
 )
 
 @Serializable
@@ -199,6 +203,7 @@ data class DeviceStateSnapshotRequest(
     val isCharging: Boolean? = null,
     val wifiEnabled: Boolean? = null,
     val networkType: String? = null,
+    val ipAddress: String? = null,
     val foregroundPackage: String? = null,
     val agentVersion: String? = null,
     val agentBuildCode: Int? = null,

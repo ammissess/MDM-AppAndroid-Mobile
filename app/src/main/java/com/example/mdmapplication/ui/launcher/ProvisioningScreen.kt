@@ -67,6 +67,8 @@ fun ProvisioningScreen(
     error: String?,
     rebootError: String?,
     rebootRequested: Boolean,
+    deviceCode: String,
+    deviceDisplayName: String,
     language: AppLanguage,
     onLanguageChange: (AppLanguage) -> Unit,
     onRetry: () -> Unit,
@@ -145,6 +147,10 @@ fun ProvisioningScreen(
                     ProvisioningHeader(
                         title = strings.title,
                         stateLabel = setupStateLabel(setupState, language),
+                        identityLabel = listOf(deviceCode, deviceDisplayName)
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .joinToString(" • "),
                         changeLanguageLabel = strings.changeLanguage,
                         onLanguageChange = {
                             onLanguageChange(
@@ -205,6 +211,7 @@ fun ProvisioningScreen(
 private fun ProvisioningHeader(
     title: String,
     stateLabel: String,
+    identityLabel: String,
     changeLanguageLabel: String,
     onLanguageChange: () -> Unit
 ) {
@@ -228,6 +235,13 @@ private fun ProvisioningHeader(
                 color = ProvisioningMuted,
                 style = MaterialTheme.typography.labelLarge
             )
+            if (identityLabel.isNotBlank()) {
+                Text(
+                    text = identityLabel,
+                    color = ProvisioningMuted,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
 
         OutlinedButton(

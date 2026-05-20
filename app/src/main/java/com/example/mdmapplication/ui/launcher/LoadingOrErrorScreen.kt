@@ -37,6 +37,8 @@ private val LoadingMuted = Color(0xFFAAB7CC)
 fun LoadingOrErrorScreen(
     loading: Boolean,
     error: String?,
+    deviceCode: String,
+    deviceDisplayName: String,
     onRetry: () -> Unit
 ) {
     val preparingApps = error == LauncherViewModel.LAUNCHER_PREPARING_MESSAGE
@@ -96,6 +98,16 @@ fun LoadingOrErrorScreen(
                         text = message ?: "Không có thông tin lỗi",
                         color = if (error != null) Color(0xFFFF9AA6) else LoadingMuted,
                         style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Text(
+                        text = listOf(deviceCode, deviceDisplayName)
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .joinToString(" • "),
+                        color = LoadingMuted,
+                        style = MaterialTheme.typography.labelMedium,
                         textAlign = TextAlign.Center
                     )
 

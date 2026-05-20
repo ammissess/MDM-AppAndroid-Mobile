@@ -1,9 +1,11 @@
 package com.example.mdmapplication.ui.launcher
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.pm.PackageManager
+import android.graphics.drawable.ColorDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -67,6 +69,11 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        }
         val initialLanguage = readAppLanguage()
         languageSelected = initialLanguage != null
         val wakeReason = parseWakeReason(intent) ?: "app_launch:onCreate"
@@ -123,7 +130,8 @@ class LauncherActivity : ComponentActivity() {
                             if (
                                 current.setupState == SetupState.ENFORCEMENT_ACTIVE &&
                                 !current.applyingConfiguration &&
-                                policy.isDeviceOwner()
+                                policy.isDeviceOwner() &&
+                                (current.lockState == DeviceLockState.LOCKED || current.config?.kioskMode == true)
                             ) {
                                 policy.startLockTaskIfPermitted(this@LauncherActivity)
                             }
@@ -141,6 +149,7 @@ class LauncherActivity : ComponentActivity() {
         setContent {
             val st by viewModel.state.collectAsState()
             var selectedLanguage by remember { mutableStateOf(initialLanguage) }
+            var showMdmInfo by remember { mutableStateOf(false) }
 
             if (selectedLanguage == null) {
                 LanguageSelectionScreen { language ->
@@ -162,15 +171,34 @@ class LauncherActivity : ComponentActivity() {
                 }
             }
 
-            LaunchedEffect(st.lockState) {
+            LaunchedEffect(
+                st.lockState,
+                st.config?.kioskMode,
+                st.config?.disableStatusBar,
+                st.adminLocked,
+                st.commandScreenLocked,
+                st.noProfileLocked
+            ) {
                 if (lastKnownLockState == DeviceLockState.LOCKED && st.lockState == DeviceLockState.ACTIVE) {
-                    runCatching { stopLockTask() }
-                        .onFailure { Log.w(tag, "stopLockTask on unlock transition failed", it) }
+                    releaseUnlockedNonKioskContainment(st, policy, "state:unlock_transition")
                 }
                 lastKnownLockState = st.lockState
             }
 
-            LaunchedEffect(st.lockState, st.setupState, st.applyingConfiguration) {
+            LaunchedEffect(
+                st.setupState,
+                st.applyingConfiguration,
+                st.lockState,
+                st.config?.kioskMode,
+                st.config?.disableStatusBar,
+                st.adminLocked,
+                st.commandScreenLocked,
+                st.noProfileLocked
+            ) {
+                releaseUnlockedNonKioskContainment(st, policy, "state:non_kiosk")
+            }
+
+            LaunchedEffect(st.lockState, st.setupState, st.applyingConfiguration, st.adminLocked, st.commandScreenLocked, st.noProfileLocked) {
                 if (
                     st.lockState == DeviceLockState.LOCKED &&
                     st.setupState == SetupState.ENFORCEMENT_ACTIVE &&
@@ -198,6 +226,8 @@ class LauncherActivity : ComponentActivity() {
                             error = st.error,
                             rebootError = st.rebootError,
                             rebootRequested = st.rebootRequested,
+                            deviceCode = st.deviceCode,
+                            deviceDisplayName = st.deviceDisplayName,
                             language = language,
                             onLanguageChange = { nextLanguage ->
                                 saveAppLanguage(nextLanguage)
@@ -216,6 +246,8 @@ class LauncherActivity : ComponentActivity() {
                             st.unlockError,
                             st.lockReason,
                             st.noProfileLocked,
+                            st.adminLocked,
+                            st.commandScreenLocked,
                             st.lockState,
                             st.lockContainmentStatus,
                             st.lockContainmentErrorCode,
@@ -232,50 +264,80 @@ class LauncherActivity : ComponentActivity() {
                     }
 
                     st.lockState == DeviceLockState.ACTIVE -> {
-                        LauncherScreen(
-                            apps = st.apps,
-                            isDeviceOwner = st.isDeviceOwner,
-                            onAppClick = { pkg ->
-                                Log.i(tag, "launcher app click package=$pkg")
-                                val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
-                                if (launchIntent == null) {
-                                    Log.w(tag, "launcher app click blocked reason=not_launchable package=$pkg")
-                                    Toast.makeText(
-                                        this@LauncherActivity,
-                                        "Ứng dụng chưa sẵn sàng để mở.",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                } else {
-                                    if (st.isDeviceOwner) {
-                                        policy.preparePackageForLaunch(pkg)
+                        if (showMdmInfo) {
+                            MdmDeviceInfoScreen(
+                                language = language,
+                                deviceCode = st.deviceCode,
+                                deviceDisplayName = st.deviceDisplayName,
+                                ownerLabel = st.config?.userCode,
+                                lastConfigSyncAtEpochMillis = st.lastConfigSyncAtEpochMillis,
+                                isDeviceOwner = st.isDeviceOwner,
+                                profileLinked = st.config != null,
+                                adminLocked = st.adminLocked,
+                                onLanguageChange = { nextLanguage ->
+                                    saveAppLanguage(nextLanguage)
+                                    selectedLanguage = nextLanguage
+                                    languageSelected = true
+                                },
+                                onBack = { showMdmInfo = false }
+                            )
+                        } else {
+                            LauncherScreen(
+                                language = language,
+                                apps = st.apps,
+                                isDeviceOwner = st.isDeviceOwner,
+                                deviceCode = st.deviceCode,
+                                deviceDisplayName = st.deviceDisplayName,
+                                onAppClick = { pkg ->
+                                    Log.i(tag, "launcher app click package=$pkg")
+                                    if (pkg == packageName) {
+                                        showMdmInfo = true
+                                        Log.i(tag, "self app click opened mdm info screen")
+                                        return@LauncherScreen
                                     }
 
-                                    runCatching { startActivity(launchIntent) }
-                                        .onSuccess { Log.i(tag, "launcher app launch requested package=$pkg") }
-                                        .onFailure { err ->
-                                            Log.w(tag, "launcher app launch failed package=$pkg", err)
-                                            Toast.makeText(
-                                                this@LauncherActivity,
-                                                "Không thể mở ứng dụng này.",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                    val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+                                    if (launchIntent == null) {
+                                        Log.w(tag, "launcher app click blocked reason=not_launchable package=$pkg")
+                                        Toast.makeText(
+                                            this@LauncherActivity,
+                                            if (language == AppLanguage.VI) "Ứng dụng chưa sẵn sàng để mở." else "App is not ready to open.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        if (st.isDeviceOwner) {
+                                            policy.preparePackageForLaunch(pkg)
                                         }
-                                }
-                            },
-                            onClearPersistentHome = {
-                                if (st.isDeviceOwner) policy.clearPersistentPreferredActivities()
-                            },
-                            onApplyKioskHome = {
-                                triggerRuntimeWake("manualApplyKioskHome", force = true)
-                            },
-                            onExitLockTask = { runCatching { stopLockTask() } }
-                        )
+
+                                        runCatching { startActivity(launchIntent) }
+                                            .onSuccess { Log.i(tag, "launcher app launch requested package=$pkg") }
+                                            .onFailure { err ->
+                                                Log.w(tag, "launcher app launch failed package=$pkg", err)
+                                                Toast.makeText(
+                                                    this@LauncherActivity,
+                                                    if (language == AppLanguage.VI) "Không thể mở ứng dụng này." else "Unable to open this app.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                    }
+                                },
+                                onClearPersistentHome = {
+                                    if (st.isDeviceOwner) policy.clearPersistentPreferredActivities()
+                                },
+                                onApplyKioskHome = {
+                                    triggerRuntimeWake("manualApplyKioskHome", force = true)
+                                },
+                                onExitLockTask = { runCatching { stopLockTask() } }
+                            )
+                        }
                     }
 
                     else -> {
                         LoadingOrErrorScreen(
                             loading = st.loading,
                             error = st.error,
+                            deviceCode = st.deviceCode,
+                            deviceDisplayName = st.deviceDisplayName,
                             onRetry = { triggerRuntimeWake("manualRetry", force = true) }
                         )
                     }
@@ -429,6 +491,55 @@ class LauncherActivity : ComponentActivity() {
         viewModel.requestRuntimeWake(context = this, reason = reason, force = force)
     }
 
+    private fun releaseUnlockedNonKioskContainment(
+        st: LauncherUiState,
+        policy: DevicePolicyHelper,
+        reason: String
+    ) {
+        if (st.setupState != SetupState.ENFORCEMENT_ACTIVE) return
+        if (st.applyingConfiguration) return
+        if (st.lockState == DeviceLockState.LOCKED) return
+        val config = st.config ?: return
+        val effectiveKioskMode = config.kioskMode || st.lockOverlayActive
+        val effectiveDisableStatusBar = config.disableStatusBar || st.lockOverlayActive
+
+        Log.i(
+            lockContainmentTag,
+            "restore reason=$reason lockOverlayActive=${st.lockOverlayActive} lockOverlayReason=${st.lockOverlayReason} " +
+                    "adminLocked=${st.adminLocked} commandScreenLocked=${st.commandScreenLocked} " +
+                    "desiredKioskMode=${config.kioskMode} desiredDisableStatusBar=${config.disableStatusBar} " +
+                    "effectiveKioskMode=$effectiveKioskMode effectiveDisableStatusBar=$effectiveDisableStatusBar"
+        )
+
+        if (effectiveDisableStatusBar) {
+            policy.disableStatusBar(true)
+            Log.i(tag, "setStatusBarDisabled(true) requested reason=$reason")
+        } else {
+            policy.disableStatusBar(false)
+            Log.i(tag, "setStatusBarDisabled(false) requested reason=$reason")
+        }
+
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val lockTaskModeState = runCatching {
+            activityManager?.lockTaskModeState ?: ActivityManager.LOCK_TASK_MODE_NONE
+        }.getOrDefault(ActivityManager.LOCK_TASK_MODE_NONE)
+        Log.i(
+            tag,
+            "release containment check reason=$reason desiredKioskMode=${config.kioskMode} desiredDisableStatusBar=${config.disableStatusBar} effectiveKioskMode=$effectiveKioskMode effectiveDisableStatusBar=$effectiveDisableStatusBar lockTaskModeState=$lockTaskModeState"
+        )
+
+        if (effectiveKioskMode) {
+            policy.startLockTaskIfPermitted(this)
+            return
+        }
+
+        if (lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+            runCatching { stopLockTask() }
+                .onSuccess { Log.i(tag, "stopLockTask enforced reason=$reason modeBefore=$lockTaskModeState") }
+                .onFailure { Log.w(tag, "stopLockTask enforced failed reason=$reason modeBefore=$lockTaskModeState", it) }
+        }
+    }
+
     private fun readAppLanguage(): AppLanguage? =
         AppLanguage.fromStorage(
             getSharedPreferences(LANGUAGE_PREFS_NAME, Context.MODE_PRIVATE)
@@ -446,6 +557,22 @@ class LauncherActivity : ComponentActivity() {
         val st = viewModel.state.value
         if (st.lockState != DeviceLockState.LOCKED) return
         if (st.setupState != SetupState.ENFORCEMENT_ACTIVE) return
+        val desiredKioskMode = st.config?.kioskMode == true
+        val desiredDisableStatusBar = st.config?.disableStatusBar == true
+        val effectiveKioskMode = desiredKioskMode || st.lockOverlayActive
+        val effectiveDisableStatusBar = desiredDisableStatusBar || st.lockOverlayActive
+        val policy = DevicePolicyHelper(this)
+        Log.i(
+            lockContainmentTag,
+            "lockOverlayActive=${st.lockOverlayActive} lockOverlayReason=${st.lockOverlayReason} " +
+                    "adminLocked=${st.adminLocked} commandScreenLocked=${st.commandScreenLocked} noProfileLocked=${st.noProfileLocked} " +
+                    "desiredKioskMode=$desiredKioskMode desiredDisableStatusBar=$desiredDisableStatusBar " +
+                    "effectiveKioskMode=$effectiveKioskMode effectiveDisableStatusBar=$effectiveDisableStatusBar reason=$reason"
+        )
+        if (effectiveDisableStatusBar) {
+            policy.disableStatusBar(true)
+            Log.i(tag, "setStatusBarDisabled(true) requested reason=$reason")
+        }
         if (st.applyingConfiguration) {
             Log.i(lockContainmentTag, "enforce skip reason=policyInFlight source=$reason")
             return
@@ -481,7 +608,6 @@ class LauncherActivity : ComponentActivity() {
 
         logTopActivityState("before:$reason")
 
-        val policy = DevicePolicyHelper(this)
         lockContainmentInFlight = true
         val outcome = try {
             lastLockTaskStartAtMs = SystemClock.elapsedRealtime()

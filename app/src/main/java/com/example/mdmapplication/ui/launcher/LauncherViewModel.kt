@@ -42,6 +42,7 @@ import com.example.mdmapplication.device.DeviceRuntimeIdentity
 import com.example.mdmapplication.device.MyDeviceAdminReceiver
 import com.example.mdmapplication.device.syncPendingFcmToken
 import com.example.mdmapplication.model.LauncherApp
+import com.example.mdmapplication.usage.AppUsageTracker
 import com.example.mdmapplication.util.readBatteryInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -55,9 +56,21 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
+import java.net.NetworkInterface
 import java.security.MessageDigest
+import java.util.Collections
 
 enum class DeviceLockState { UNKNOWN, LOCKED, ACTIVE }
+
+enum class LockOverlayReason { ADMIN_LOCK, COMMAND_LOCK_SCREEN, NO_PROFILE }
+
+data class RuntimeLockOverlay(
+    val active: Boolean,
+    val reason: LockOverlayReason?
+)
 
 data class LauncherUiState(
     val loading: Boolean = false,
@@ -74,10 +87,30 @@ data class LauncherUiState(
     val unlockSubmitting: Boolean = false,
     val lockContainmentStatus: String? = null,
     val lockContainmentErrorCode: String? = null,
+    val deviceCode: String = "",
+    val deviceDisplayName: String = "",
+    val adminLocked: Boolean = false,
+    val adminLockReason: String? = null,
+    val commandScreenLocked: Boolean = false,
+    val lastConfigSyncAtEpochMillis: Long? = null,
     val applyingConfiguration: Boolean = false,
     val config: DeviceConfigResponse? = null,
     val apps: List<LauncherApp> = emptyList()
-)
+) {
+    val lockOverlayReason: LockOverlayReason?
+        get() = when {
+            adminLocked -> LockOverlayReason.ADMIN_LOCK
+            commandScreenLocked -> LockOverlayReason.COMMAND_LOCK_SCREEN
+            noProfileLocked -> LockOverlayReason.NO_PROFILE
+            else -> null
+        }
+
+    val lockOverlayActive: Boolean
+        get() = lockOverlayReason != null
+
+    val runtimeLockOverlay: RuntimeLockOverlay
+        get() = RuntimeLockOverlay(active = lockOverlayActive, reason = lockOverlayReason)
+}
 
 sealed class LauncherCommandAction {
     object TryLockScreen : LauncherCommandAction()
@@ -92,8 +125,12 @@ class LauncherViewModel : ViewModel() {
         const val NO_PROFILE_UNLOCK_BLOCKED_MESSAGE = "Thiết bị chưa được gán profile. Không thể mở khóa."
         const val REMOTE_SCREEN_UNLOCK_UNSUPPORTED_MESSAGE =
             "Thiết bị đang bị khóa từ xa. Mã kích hoạt chỉ dùng để kích hoạt thiết bị, không dùng để mở khóa màn hình. Chức năng mở khóa màn hình từ xa cần được hỗ trợ bằng lệnh riêng từ hệ thống quản trị."
+        const val ADMIN_LOCKED_MESSAGE = "Thiết bị đang bị khóa bởi quản trị viên. Vui lòng liên hệ quản trị viên."
+        const val COMMAND_SCREEN_LOCKED_MESSAGE = "Màn hình đang bị khóa bởi lệnh lock_screen."
         const val LAUNCHER_PREPARING_MESSAGE =
             "Launcher đang chuẩn bị dữ liệu ứng dụng. Vui lòng chờ thiết bị nhận hồ sơ cấu hình và danh sách ứng dụng được phép."
+        private const val MAX_LOCATION_FIX_AGE_MS = 30 * 60 * 1000L
+        private const val USAGE_UPLOAD_INTERVAL_MS = 10_000L
     }
 
     fun updateLockContainment(status: String?, errorCode: String?) {
@@ -123,9 +160,12 @@ class LauncherViewModel : ViewModel() {
     private var cachedToken: String? = null
     private var cachedTokenDeviceCode: String? = null
     private var cachedDeviceCode: String? = null
+    private var lastAllowedAppsSignalAtMs: Long = 0L
+    private var lastAllowedAppsSignature: String? = null
 
     private var locationJob: Job? = null
     private var usageBatchJob: Job? = null
+    private var usageTracker: AppUsageTracker? = null
     private var commandPollJob: Job? = null
     private var stateSnapshotJob: Job? = null
     private val configLoadMutex = Mutex()
@@ -137,6 +177,17 @@ class LauncherViewModel : ViewModel() {
     private var runtimeWakeInFlight: Boolean = false
     private val supportedCommandTypes = setOf("lock_screen", "refresh_config", "sync_config")
     private val runtimeWakeDebounceMs = 2_000L
+    private val commandConsistencyRetryDelayMs = 2_000L
+    private val allowedAppsSignalDedupWindowMs = 2_500L
+
+    private data class EffectiveRuntimePolicy(
+        val desiredKioskMode: Boolean,
+        val desiredDisableStatusBar: Boolean,
+        val lockOverlayActive: Boolean,
+        val lockOverlayReason: LockOverlayReason?,
+        val effectiveKioskMode: Boolean,
+        val effectiveDisableStatusBar: Boolean
+    )
 
     private val setupPrefsName = "mdm_setup_state"
     private val policyApplyPrefsName = "mdm_policy_apply_state"
@@ -163,6 +214,35 @@ class LauncherViewModel : ViewModel() {
 
     private fun setEnforcementAllowed(context: Context, value: Boolean) {
         setupPrefs(context).edit().putBoolean(keyEnforcementAllowedAfterReboot, value).apply()
+    }
+
+    private fun computeEffectiveRuntimePolicy(
+        desiredConfig: DeviceConfigResponse?,
+        state: LauncherUiState = _state.value
+    ): EffectiveRuntimePolicy {
+        val desiredKioskMode = desiredConfig?.kioskMode == true
+        val desiredDisableStatusBar = desiredConfig?.disableStatusBar == true
+        val lockOverlay = state.runtimeLockOverlay
+        return EffectiveRuntimePolicy(
+            desiredKioskMode = desiredKioskMode,
+            desiredDisableStatusBar = desiredDisableStatusBar,
+            lockOverlayActive = lockOverlay.active,
+            lockOverlayReason = lockOverlay.reason,
+            effectiveKioskMode = desiredKioskMode || lockOverlay.active,
+            effectiveDisableStatusBar = desiredDisableStatusBar || lockOverlay.active
+        )
+    }
+
+    private fun logRuntimeLockOverlay(source: String, desiredConfig: DeviceConfigResponse? = _state.value.config) {
+        val st = _state.value
+        val effective = computeEffectiveRuntimePolicy(desiredConfig = desiredConfig, state = st)
+        Log.i(
+            "MDM_LOCK_OVERLAY",
+            "source=$source lockOverlayActive=${effective.lockOverlayActive} lockOverlayReason=${effective.lockOverlayReason} " +
+                    "adminLocked=${st.adminLocked} commandScreenLocked=${st.commandScreenLocked} noProfileLocked=${st.noProfileLocked} " +
+                    "desiredKioskMode=${effective.desiredKioskMode} desiredDisableStatusBar=${effective.desiredDisableStatusBar} " +
+                    "effectiveKioskMode=${effective.effectiveKioskMode} effectiveDisableStatusBar=${effective.effectiveDisableStatusBar}"
+        )
     }
 
     private fun buildProvisioningSteps(
@@ -660,6 +740,11 @@ class LauncherViewModel : ViewModel() {
     fun unlock(context: Context, password: String) {
         val deviceCode = resolveCurrentDeviceCode(context, reason = "unlock")
         Log.i(tag, "unlock requested deviceCode=$deviceCode")
+        if (_state.value.adminLocked) {
+            _state.value = _state.value.copy(unlockError = ADMIN_LOCKED_MESSAGE, unlockSubmitting = false)
+            Log.i("MDM_ADMIN_LOCK", "password unlock blocked deviceCode=$deviceCode")
+            return
+        }
 
         viewModelScope.launch {
             _state.value = _state.value.copy(unlockSubmitting = true, unlockError = null, error = null)
@@ -701,28 +786,52 @@ class LauncherViewModel : ViewModel() {
                         _state.value = _state.value.copy(
                             lockState = DeviceLockState.LOCKED,
                             noProfileLocked = true,
+                            commandScreenLocked = false,
                             lockReason = NO_PROFILE_LOCKED_MESSAGE,
                             lockContainmentStatus = "PENDING",
                             lockContainmentErrorCode = null,
                             unlockError = NO_PROFILE_UNLOCK_BLOCKED_MESSAGE,
                             unlockSubmitting = false
                         )
+                        logRuntimeLockOverlay(source = "unlock_exception:profile_not_linked")
                         Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_exception deviceCode=$deviceCode noProfileLocked=true")
+                        startCommandPollLoop(context)
+                        _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                    }
+
+                    isAdminLocked(e) -> {
+                        _state.value = _state.value.copy(
+                            lockState = DeviceLockState.LOCKED,
+                            noProfileLocked = false,
+                            adminLocked = true,
+                            commandScreenLocked = false,
+                            adminLockReason = e.message,
+                            lockReason = ADMIN_LOCKED_MESSAGE,
+                            lockContainmentStatus = "PENDING",
+                            lockContainmentErrorCode = null,
+                            unlockError = ADMIN_LOCKED_MESSAGE,
+                            unlockSubmitting = false
+                        )
+                        logRuntimeLockOverlay(source = "unlock_exception:admin_locked")
+                        Log.i("MDM_ADMIN_LOCK", "password unlock rejected by backend deviceCode=$deviceCode")
                         startCommandPollLoop(context)
                         _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
                     }
 
                     isDeviceLocked(e) -> {
                         stopTelemetryLoops()
+                        val keepCommandScreenLock = _state.value.commandScreenLocked && !_state.value.adminLocked
                         _state.value = _state.value.copy(
                             lockState = DeviceLockState.LOCKED,
                             noProfileLocked = false,
-                            lockReason = null,
+                            commandScreenLocked = keepCommandScreenLock,
+                            lockReason = if (keepCommandScreenLock) COMMAND_SCREEN_LOCKED_MESSAGE else null,
                             lockContainmentStatus = "PENDING",
                             lockContainmentErrorCode = null,
                             unlockError = e.message,
                             unlockSubmitting = false
                         )
+                        logRuntimeLockOverlay(source = "unlock_exception:device_locked")
                         Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_exception deviceCode=$deviceCode noProfileLocked=false")
                         startCommandPollLoop(context)
                         _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
@@ -758,7 +867,24 @@ class LauncherViewModel : ViewModel() {
         )
 
         return if (normalizedStatus == "ACTIVE") {
-            if (shouldRejectActivationUnlockForRemoteScreenLock(message)) {
+            val current = _state.value
+            if (current.commandScreenLocked && !current.adminLocked) {
+                _state.value = current.copy(
+                    loading = false,
+                    lockState = DeviceLockState.ACTIVE,
+                    noProfileLocked = false,
+                    commandScreenLocked = false,
+                    lockReason = null,
+                    lockContainmentStatus = null,
+                    lockContainmentErrorCode = null,
+                    unlockError = null,
+                    error = null,
+                    unlockSubmitting = false
+                )
+                Log.i("MDM_COMMAND_LOCK", "password unlock cleared commandScreenLocked deviceCode=$deviceCode")
+                logRuntimeLockOverlay(source = "unlock_response:command_lock_cleared")
+                true
+            } else if (shouldRejectActivationUnlockForRemoteScreenLock(message)) {
                 val current = _state.value
                 _state.value = current.copy(
                     loading = false,
@@ -775,15 +901,18 @@ class LauncherViewModel : ViewModel() {
                     tag,
                     "MDM_UNLOCK activation noop ignored for remote screen lock source=unlock_response deviceCode=$deviceCode message=$message"
                 )
+                logRuntimeLockOverlay(source = "unlock_response:remote_lock_rejected")
                 false
             } else {
                 _state.value = _state.value.copy(
                     noProfileLocked = false,
+                    commandScreenLocked = false,
                     lockReason = null,
                     unlockError = null,
                     error = null
                 )
                 Log.i(tag, "MDM_UNLOCK state transition ACTIVE source=unlock_response deviceCode=$deviceCode")
+                logRuntimeLockOverlay(source = "unlock_response:active")
                 true
             }
         } else {
@@ -795,7 +924,8 @@ class LauncherViewModel : ViewModel() {
             _state.value = _state.value.copy(
                 lockState = DeviceLockState.LOCKED,
                 noProfileLocked = mappedNoProfile,
-                lockReason = if (mappedNoProfile) NO_PROFILE_LOCKED_MESSAGE else null,
+                commandScreenLocked = if (mappedNoProfile) false else _state.value.commandScreenLocked,
+                lockReason = if (mappedNoProfile) NO_PROFILE_LOCKED_MESSAGE else if (_state.value.commandScreenLocked) COMMAND_SCREEN_LOCKED_MESSAGE else null,
                 lockContainmentStatus = "PENDING",
                 lockContainmentErrorCode = null,
                 unlockError = unlockErrorMessage,
@@ -803,6 +933,7 @@ class LauncherViewModel : ViewModel() {
                 unlockSubmitting = false
             )
             Log.i(tag, "MDM_UNLOCK state transition LOCKED source=unlock_response deviceCode=$deviceCode noProfileLocked=$mappedNoProfile")
+            logRuntimeLockOverlay(source = "unlock_response:locked")
             false
         }
     }
@@ -811,6 +942,7 @@ class LauncherViewModel : ViewModel() {
         val current = _state.value
         return current.lockState == DeviceLockState.LOCKED &&
             !current.noProfileLocked &&
+            !current.commandScreenLocked &&
             isAlreadyUnlockedActivationResponse(message)
     }
 
@@ -849,8 +981,12 @@ class LauncherViewModel : ViewModel() {
 
         _state.value = _state.value.copy(apps = rebuilt)
 
-        if (oldPackages != newPackages && _state.value.setupState == SetupState.ENFORCEMENT_ACTIVE) {
-            _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
+        if (_state.value.setupState == SetupState.ENFORCEMENT_ACTIVE) {
+            emitAllowedAppsUpdatedIfChanged(
+                previousPackages = oldPackages,
+                updatedPackages = newPackages,
+                source = "rebuildVisibleApps"
+            )
         }
     }
 
@@ -913,7 +1049,9 @@ class LauncherViewModel : ViewModel() {
                 val config = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
                 Log.i(
                     configFetchTag,
-                    "fetch config success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis}"
+                    "fetch config success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} " +
+                            "kioskMode=${config.kioskMode} disableStatusBar=${config.disableStatusBar} " +
+                            "lockState=${_state.value.lockState} setupState=${_state.value.setupState}"
                 )
                 if (provisioningMode) {
                     setProvisioningProgress(
@@ -933,6 +1071,19 @@ class LauncherViewModel : ViewModel() {
                     )
                 }
                 val appliedConfigHash = buildAppliedConfigHashOrNull(config)
+                val previousConfigVersion = previousConfig?.configVersionEpochMillis
+                val previousConfigHash = previousConfig?.let { buildAppliedConfigHashOrNull(it) }
+                val changedByVersion = previousConfigVersion != null &&
+                        previousConfigVersion != config.configVersionEpochMillis
+                val changedByHash = !previousConfigHash.isNullOrBlank() &&
+                        !appliedConfigHash.isNullOrBlank() &&
+                        previousConfigHash != appliedConfigHash
+                Log.i(
+                    configFetchTag,
+                    "config compare source=$source deviceCode=$deviceCode oldVersion=$previousConfigVersion " +
+                            "newVersion=${config.configVersionEpochMillis} oldHash=$previousConfigHash newHash=$appliedConfigHash " +
+                            "changedByVersion=$changedByVersion changedByHash=$changedByHash"
+                )
 
                 val policyResult = applyPolicyAndReport(
                     context = context,
@@ -944,22 +1095,38 @@ class LauncherViewModel : ViewModel() {
 
                 val apps = loadAllowedApps(context, config.allowedApps)
 
-                val changed = previousConfig?.allowedApps != config.allowedApps ||
-                        previousConfig?.configVersionEpochMillis != config.configVersionEpochMillis
+                val previousVisiblePackages = _state.value.apps.map { it.packageName }
+                val updatedVisiblePackages = apps.map { it.packageName }
 
+                val currentAdminLocked = _state.value.adminLocked
+                val previousLockState = _state.value.lockState
+                val previousNoProfileLocked = _state.value.noProfileLocked
                 val shouldStayLocked = shouldStayLockedOnConfigUpdate(
-                    currentLockState = _state.value.lockState,
-                    noProfileLocked = _state.value.noProfileLocked,
+                    currentLockState = previousLockState,
+                    noProfileLocked = previousNoProfileLocked,
+                    currentAdminLocked = currentAdminLocked,
+                    commandScreenLocked = _state.value.commandScreenLocked,
                     source = source
                 )
+                val adminLocked = config.adminLocked
                 val enforcementAllowedNow = isEnforcementAllowed(context)
                 val currentSetupState = _state.value.setupState
                 val launcherReady = config.allowedApps.isEmpty() || apps.isNotEmpty()
+                Log.i(
+                    "MDM_ADMIN_LOCK",
+                    "config adminLocked=$adminLocked reason=${config.adminLockReason} source=$source deviceCode=$deviceCode"
+                )
+                if (!adminLocked && previousLockState == DeviceLockState.LOCKED && !previousNoProfileLocked && !shouldStayLocked) {
+                    Log.i(
+                        "MDM_ADMIN_LOCK",
+                        "clear local lock state source=$source previousLockState=$previousLockState deviceCode=$deviceCode"
+                    )
+                }
 
                 _state.value = _state.value.copy(
                     loading = false,
                     lockState = if (enforcementAllowedNow && launcherReady) {
-                        if (shouldStayLocked) DeviceLockState.LOCKED else DeviceLockState.ACTIVE
+                        if (adminLocked || shouldStayLocked) DeviceLockState.LOCKED else DeviceLockState.ACTIVE
                     } else {
                         DeviceLockState.UNKNOWN
                     },
@@ -969,18 +1136,31 @@ class LauncherViewModel : ViewModel() {
                         currentSetupState
                     },
                     noProfileLocked = false,
-                    lockReason = null,
-                    lockContainmentStatus = if (enforcementAllowedNow && launcherReady && shouldStayLocked) "PENDING" else null,
+                    adminLocked = adminLocked,
+                    adminLockReason = config.adminLockReason,
+                    commandScreenLocked = !adminLocked && shouldStayLocked,
+                    lockReason = when {
+                        adminLocked -> ADMIN_LOCKED_MESSAGE
+                        shouldStayLocked -> COMMAND_SCREEN_LOCKED_MESSAGE
+                        else -> null
+                    },
+                    lockContainmentStatus = if (enforcementAllowedNow && launcherReady && (adminLocked || shouldStayLocked)) "PENDING" else null,
                     lockContainmentErrorCode = null,
                     config = config,
                     apps = apps,
+                    lastConfigSyncAtEpochMillis = System.currentTimeMillis(),
                     error = if (launcherReady) null else LAUNCHER_PREPARING_MESSAGE,
                     applyingConfiguration = false,
                     unlockError = null
                 )
+                logRuntimeLockOverlay(source = "config:$source", desiredConfig = config)
 
-                if (changed && enforcementAllowedNow && launcherReady) {
-                    _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
+                if (enforcementAllowedNow && launcherReady) {
+                    emitAllowedAppsUpdatedIfChanged(
+                        previousPackages = previousVisiblePackages,
+                        updatedPackages = updatedVisiblePackages,
+                        source = source
+                    )
                 }
 
                 if (enforcementAllowedNow) {
@@ -993,6 +1173,9 @@ class LauncherViewModel : ViewModel() {
                 }
                 runCatching { reportStateSnapshotNow(context, deviceCode, token) }
                 runCatching { reportAppInventoryNow(context, deviceCode, token) }
+                if (adminLocked) {
+                    _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+                }
                 Log.i(
                     tag,
                     "loadConfig exit success source=$source deviceCode=$deviceCode configVersion=${config.configVersionEpochMillis} commandPollActive=${commandPollJob?.isActive == true}"
@@ -1143,6 +1326,7 @@ class LauncherViewModel : ViewModel() {
                     launcherPackage = context.packageName,
                     allowedApps = config.allowedApps,
                     kioskMode = config.kioskMode,
+                    disableStatusBar = config.disableStatusBar,
                     reason = "unchanged_config"
                 )
                 reportPolicyStateNow(
@@ -1476,23 +1660,23 @@ class LauncherViewModel : ViewModel() {
                             continue
                         }
 
-                        val gps = try {
-                            lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                        } catch (_: SecurityException) {
-                            null
-                        }
-
-                        val validFix = gps?.toValidLocationFixOrNull()
+                        val (validFix, providerState) = selectBestLocationFix(
+                            locationManager = lm,
+                            canUseFineLocation = hasFineLocationAfterPolicy,
+                            canUseCoarseLocation = hasCoarseLocationAfterPolicy
+                        )
                         if (validFix == null) {
-                            val gpsEnabled = runCatching { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) }
-                                .getOrDefault(false)
                             Log.i(
                                 tag,
-                                "location report skipped reason=no_valid_fix deviceCode=$deviceCode gpsEnabled=$gpsEnabled hasLocation=${gps != null}"
+                                "location report skipped reason=no_valid_fix deviceCode=$deviceCode providers=$providerState"
                             )
                             delay(60_000L)
                             continue
                         }
+                        Log.i(
+                            tag,
+                            "location provider selected deviceCode=$deviceCode provider=${validFix.provider} ageMs=${validFix.ageMillis} accuracyMeters=${validFix.accuracyMeters}"
+                        )
 
                         val req = LocationUpdateRequest(
                             deviceCode = deviceCode,
@@ -1531,38 +1715,107 @@ class LauncherViewModel : ViewModel() {
         val longitude: Double,
         val accuracyMeters: Double,
         val provider: String,
+        val reportedAtEpochMillis: Long,
+        val ageMillis: Long,
     )
 
-    private fun Location.toValidLocationFixOrNull(): ValidLocationFix? {
+    private data class ProviderLocationProbe(
+        val provider: String,
+        val enabled: Boolean,
+        val hasLastKnown: Boolean,
+        val validFix: ValidLocationFix?
+    )
+
+    private fun selectBestLocationFix(
+        locationManager: LocationManager,
+        canUseFineLocation: Boolean,
+        canUseCoarseLocation: Boolean
+    ): Pair<ValidLocationFix?, String> {
+        val providers = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER
+        ).filter { provider ->
+            when (provider) {
+                LocationManager.GPS_PROVIDER -> canUseFineLocation
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER -> canUseFineLocation || canUseCoarseLocation
+                else -> false
+            }
+        }
+
+        val now = System.currentTimeMillis()
+        val probes = providers.map { provider ->
+            val enabled = runCatching { locationManager.isProviderEnabled(provider) }
+                .getOrDefault(false)
+            val lastKnown = runCatching { locationManager.getLastKnownLocation(provider) }
+                .getOrNull()
+            ProviderLocationProbe(
+                provider = provider,
+                enabled = enabled,
+                hasLastKnown = lastKnown != null,
+                validFix = lastKnown?.toValidLocationFixOrNull(now)
+            )
+        }
+        val bestFix = probes
+            .mapNotNull { it.validFix }
+            .sortedWith(
+                compareByDescending<ValidLocationFix> { it.reportedAtEpochMillis }
+                    .thenBy { it.accuracyMeters }
+            )
+            .firstOrNull()
+        val providerState = probes.joinToString(";") { probe ->
+            "${probe.provider}:enabled=${probe.enabled},lastKnown=${probe.hasLastKnown},valid=${probe.validFix != null}"
+        }.ifBlank { "none_available" }
+        return bestFix to providerState
+    }
+
+    private fun Location.toValidLocationFixOrNull(nowEpochMillis: Long): ValidLocationFix? {
         val latitude = latitude
         val longitude = longitude
-        val accuracyMeters = accuracy.toDouble()
+        val accuracyMeters = if (hasAccuracy()) accuracy.toDouble().coerceAtLeast(0.0) else 0.0
+        val reportedAt = time.takeIf { it > 0L } ?: nowEpochMillis
+        val ageMillis = (nowEpochMillis - reportedAt).coerceAtLeast(0L)
 
         if (!latitude.isFinite() || !longitude.isFinite()) return null
+        if (!accuracyMeters.isFinite()) return null
         if (latitude !in -90.0..90.0 || longitude !in -180.0..180.0) return null
-        if (accuracyMeters <= 0.0) return null
-        if (latitude == 0.0 && longitude == 0.0 && accuracyMeters == 0.0) return null
+        if (latitude == 0.0 && longitude == 0.0) return null
+        if (ageMillis > MAX_LOCATION_FIX_AGE_MS) return null
 
         return ValidLocationFix(
             latitude = latitude,
             longitude = longitude,
             accuracyMeters = accuracyMeters,
             provider = provider ?: LocationManager.GPS_PROVIDER,
+            reportedAtEpochMillis = reportedAt,
+            ageMillis = ageMillis,
         )
     }
 
     private fun startUsageBatchLoop(context: Context) {
         if (usageBatchJob?.isActive == true) return
+        val appContext = context.applicationContext
+        val tracker = usageTracker ?: AppUsageTracker(appContext.packageName).also { usageTracker = it }
         usageBatchJob = viewModelScope.launch {
+            var lastSampleAtMs = System.currentTimeMillis()
             while (true) {
-                delay(5 * 60_000L)
+                delay(USAGE_UPLOAD_INTERVAL_MS)
 
-                val deviceCode = cachedDeviceCode ?: continue
+                val deviceCode = cachedDeviceCode
+                if (deviceCode == null) {
+                    lastSampleAtMs = System.currentTimeMillis()
+                    continue
+                }
                 try {
                     val endMs = System.currentTimeMillis()
-                    val startMs = endMs - 5 * 60_000L
-                    val usageList = collectAppUsage(context, startMs, endMs)
-                    if (usageList.isEmpty()) continue
+                    val startMs = lastSampleAtMs
+                    lastSampleAtMs = endMs
+                    val usageList = tracker.collect(appContext, startMs, endMs)
+                    if (usageList.isEmpty()) {
+                        Log.i("MDM_USAGE", "upload skipped reason=empty deviceCode=$deviceCode")
+                        continue
+                    }
 
                     val token = getOrRefreshToken(deviceCode)
                     val req = UsageBatchReportRequest(
@@ -1576,11 +1829,16 @@ class LauncherViewModel : ViewModel() {
                             )
                         }
                     )
-                    api.reportUsageBatch(token = token, req = req)
+                    val response = api.reportUsageBatch(token = token, req = req)
+                    Log.i(
+                        "MDM_USAGE",
+                        "upload ok=${response.ok} inserted=${response.inserted} deviceCode=$deviceCode items=${usageList.size}"
+                    )
                 } catch (e: MdmApi.ApiException) {
+                    Log.w("MDM_USAGE", "upload api failure code=${e.httpCode} backendCode=${e.backendCode} message=${e.message}")
                     if (isDeviceCodeMismatch(e)) clearToken()
                 } catch (t: Throwable) {
-                    Log.e(tag, "usageBatch unexpected error", t)
+                    Log.e("MDM_USAGE", "upload unexpected error", t)
                 }
             }
         }
@@ -1786,13 +2044,17 @@ class LauncherViewModel : ViewModel() {
             wm.isWifiEnabled
         }.getOrNull()
         val networkType = readNetworkType(context)
+        val ipAddressResult = readIpAddress(context)
         val uptimeMs = android.os.SystemClock.elapsedRealtime().coerceAtLeast(0L)
         val lastBootAtEpochMillis = (reportedAtEpochMillis - uptimeMs).takeIf { it >= 0L }
         val (ramFreeMb, ramTotalMb) = readRamInfoMb(context)
         val (storageFreeBytes, storageTotalBytes) = readStorageInfoBytes(context)
         val agentVersion = BuildConfig.VERSION_NAME.takeIf { it.isNotBlank() }
         val agentBuildCode = BuildConfig.VERSION_CODE.takeIf { it > 0 }
-        Log.i(tag, "state payload contains ipAddress=false reason=backend_state_contract_no_field")
+        Log.i(
+            "MDM_STATE",
+            "ipAddress=${ipAddressResult.value ?: "null"} source=${ipAddressResult.source} networkType=$networkType"
+        )
 
         try {
             api.reportStateSnapshot(
@@ -1804,6 +2066,7 @@ class LauncherViewModel : ViewModel() {
                     isCharging = battery.isCharging,
                     wifiEnabled = wifiEnabled,
                     networkType = networkType,
+                    ipAddress = ipAddressResult.value,
                     foregroundPackage = context.packageName,
                     agentVersion = agentVersion,
                     agentBuildCode = agentBuildCode,
@@ -1881,6 +2144,45 @@ class LauncherViewModel : ViewModel() {
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "UNKNOWN"
             else -> "OFFLINE"
         }
+    }
+
+    private data class IpAddressResult(val value: String?, val source: String)
+
+    private fun readIpAddress(context: Context): IpAddressResult {
+        val fromConnectivity = runCatching {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = cm.activeNetwork ?: return@runCatching null
+            val linkProperties = cm.getLinkProperties(activeNetwork) ?: return@runCatching null
+            chooseReportableIpAddress(linkProperties.linkAddresses.map { it.address })
+        }.getOrNull()
+        if (fromConnectivity != null) return IpAddressResult(fromConnectivity, "connectivity")
+
+        val fromInterface = runCatching {
+            val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+            val addresses = interfaces
+                .asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { Collections.list(it.inetAddresses).asSequence() }
+                .toList()
+            chooseReportableIpAddress(addresses)
+        }.getOrNull()
+        if (fromInterface != null) return IpAddressResult(fromInterface, "networkInterface")
+
+        return IpAddressResult(null, "none")
+    }
+
+    private fun chooseReportableIpAddress(addresses: List<InetAddress>): String? {
+        val candidates = addresses.filter { address ->
+            !address.isAnyLocalAddress &&
+                    !address.isLoopbackAddress &&
+                    !address.isLinkLocalAddress &&
+                    !address.isMulticastAddress
+        }
+        val ipv4 = candidates.firstOrNull { it is Inet4Address }
+        if (ipv4 != null) return ipv4.hostAddress
+
+        val ipv6 = candidates.firstOrNull { it is Inet6Address }
+        return ipv6?.hostAddress?.substringBefore('%')
     }
 
     private fun readRamInfoMb(context: Context): Pair<Int?, Int?> {
@@ -2087,15 +2389,81 @@ class LauncherViewModel : ViewModel() {
 
         return when (normalizedType) {
             "refresh_config" -> {
-                val result = loadConfig(context, source = "command:$normalizedType")
-                if (result.success) {
-                    CommandExecResult(success = true, output = "Config refreshed and policy reported")
-                } else {
+                val beforeConfig = _state.value.config
+                val beforeVersion = beforeConfig?.configVersionEpochMillis
+                val beforeHash = beforeConfig?.let { buildAppliedConfigHashOrNull(it) }
+                val firstResult = loadConfig(context, source = "command:$normalizedType")
+                if (!firstResult.success) {
                     CommandExecResult(
                         success = false,
-                        error = result.error ?: "Refresh config failed",
-                        errorCode = result.errorCode ?: "REFRESH_CONFIG_FAILED"
+                        error = firstResult.error ?: "Refresh config failed",
+                        errorCode = firstResult.errorCode ?: "REFRESH_CONFIG_FAILED"
                     )
+                } else {
+                    val afterFirstConfig = _state.value.config
+                    val afterFirstVersion = afterFirstConfig?.configVersionEpochMillis
+                    val afterFirstHash = afterFirstConfig?.let { buildAppliedConfigHashOrNull(it) }
+                    val unchangedAfterFirstLoad = beforeVersion != null &&
+                            beforeVersion == afterFirstVersion &&
+                            (beforeHash.isNullOrBlank() || afterFirstHash.isNullOrBlank() || beforeHash == afterFirstHash)
+
+                    if (!unchangedAfterFirstLoad) {
+                        CommandExecResult(success = true, output = "Config refreshed and policy reported")
+                    } else {
+                        Log.i(
+                            handleTag,
+                            "refresh_config unchanged first-pass commandId=$commandId leaseToken=$leaseToken " +
+                                    "version=$afterFirstVersion hash=$afterFirstHash retryAfterMs=$commandConsistencyRetryDelayMs"
+                        )
+                        delay(commandConsistencyRetryDelayMs)
+
+                        val deviceCode = resolveCurrentDeviceCode(
+                            context,
+                            reason = "command_refresh_config_consistency_check"
+                        )
+                        val token = getOrRefreshToken(deviceCode)
+                        Log.i(
+                            configFetchTag,
+                            "fetch config start source=command:refresh_config:consistency_check deviceCode=$deviceCode"
+                        )
+                        val desiredRetry = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+                        val desiredRetryHash = buildAppliedConfigHashOrNull(desiredRetry)
+                        Log.i(
+                            configFetchTag,
+                            "fetch config success source=command:refresh_config:consistency_check deviceCode=$deviceCode " +
+                                    "configVersion=${desiredRetry.configVersionEpochMillis} kioskMode=${desiredRetry.kioskMode} " +
+                                    "disableStatusBar=${desiredRetry.disableStatusBar} lockState=${_state.value.lockState} setupState=${_state.value.setupState}"
+                        )
+                        val sameVersion = afterFirstVersion == desiredRetry.configVersionEpochMillis
+                        val sameHash = afterFirstHash.isNullOrBlank() ||
+                                desiredRetryHash.isNullOrBlank() ||
+                                afterFirstHash == desiredRetryHash
+                        val unchangedAfterConsistencyCheck = sameVersion && sameHash
+
+                        if (unchangedAfterConsistencyCheck) {
+                            CommandExecResult(success = true, output = "Config refreshed and policy reported")
+                        } else {
+                            Log.i(
+                                handleTag,
+                                "refresh_config consistency retry required commandId=$commandId leaseToken=$leaseToken " +
+                                        "firstVersion=$afterFirstVersion firstHash=$afterFirstHash " +
+                                        "retryVersion=${desiredRetry.configVersionEpochMillis} retryHash=$desiredRetryHash"
+                            )
+                            val retryResult = loadConfig(
+                                context,
+                                source = "command:refresh_config:consistency_retry"
+                            )
+                            if (retryResult.success) {
+                                CommandExecResult(success = true, output = "Config refreshed after consistency retry")
+                            } else {
+                                CommandExecResult(
+                                    success = false,
+                                    error = retryResult.error ?: "Refresh config consistency retry failed",
+                                    errorCode = retryResult.errorCode ?: "REFRESH_CONFIG_FAILED"
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2104,30 +2472,80 @@ class LauncherViewModel : ViewModel() {
                 val token = getOrRefreshToken(deviceCode)
                 Log.i(configFetchTag, "fetch config start source=command:sync_config deviceCode=$deviceCode")
                 val desired = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
-                Log.i(configFetchTag, "fetch config success source=command:sync_config deviceCode=$deviceCode configVersion=${desired.configVersionEpochMillis}")
+                Log.i(
+                    configFetchTag,
+                    "fetch config success source=command:sync_config deviceCode=$deviceCode configVersion=${desired.configVersionEpochMillis} " +
+                            "kioskMode=${desired.kioskMode} disableStatusBar=${desired.disableStatusBar} " +
+                            "lockState=${_state.value.lockState} setupState=${_state.value.setupState}"
+                )
 
                 val desiredHash = buildAppliedConfigHashOrNull(desired)
                 val applied = _state.value.config
                 val appliedHash = applied?.let { buildAppliedConfigHashOrNull(it) }
-                val alreadySynced = applied != null &&
-                        applied.configVersionEpochMillis == desired.configVersionEpochMillis &&
-                        desiredHash != null &&
+                val sameVersion = applied != null &&
+                        applied.configVersionEpochMillis == desired.configVersionEpochMillis
+                val sameHash = desiredHash.isNullOrBlank() ||
+                        appliedHash.isNullOrBlank() ||
                         desiredHash == appliedHash
+                val alreadySynced = sameVersion && sameHash
 
                 if (alreadySynced) {
-                    reportPolicyStateNow(
-                        token = token,
-                        req = DevicePolicyStateReportRequest(
-                            deviceCode = deviceCode,
-                            desiredConfigVersionEpochMillis = desired.configVersionEpochMillis,
-                            desiredConfigHash = desiredHash,
-                            appliedConfigVersionEpochMillis = desired.configVersionEpochMillis,
-                            appliedConfigHash = desiredHash,
-                            policyApplyStatus = "SUCCESS",
-                            policyAppliedAtEpochMillis = System.currentTimeMillis()
-                        )
+                    Log.i(
+                        handleTag,
+                        "sync_config unchanged first-pass commandId=$commandId leaseToken=$leaseToken " +
+                                "version=${desired.configVersionEpochMillis} hash=$desiredHash retryAfterMs=$commandConsistencyRetryDelayMs"
                     )
-                    CommandExecResult(success = true, output = "Config already synced")
+                    delay(commandConsistencyRetryDelayMs)
+
+                    Log.i(configFetchTag, "fetch config start source=command:sync_config:consistency_check deviceCode=$deviceCode")
+                    val desiredRetry = api.fetchCurrentConfig(token = token, deviceCode = deviceCode)
+                    val desiredRetryHash = buildAppliedConfigHashOrNull(desiredRetry)
+                    Log.i(
+                        configFetchTag,
+                        "fetch config success source=command:sync_config:consistency_check deviceCode=$deviceCode " +
+                                "configVersion=${desiredRetry.configVersionEpochMillis} kioskMode=${desiredRetry.kioskMode} " +
+                                "disableStatusBar=${desiredRetry.disableStatusBar} lockState=${_state.value.lockState} setupState=${_state.value.setupState}"
+                    )
+                    val changedDuringConsistencyCheck =
+                        desiredRetry.configVersionEpochMillis != desired.configVersionEpochMillis ||
+                                (
+                                        !desiredHash.isNullOrBlank() &&
+                                                !desiredRetryHash.isNullOrBlank() &&
+                                                desiredRetryHash != desiredHash
+                                        )
+
+                    if (!changedDuringConsistencyCheck) {
+                        reportPolicyStateNow(
+                            token = token,
+                            req = DevicePolicyStateReportRequest(
+                                deviceCode = deviceCode,
+                                desiredConfigVersionEpochMillis = desiredRetry.configVersionEpochMillis,
+                                desiredConfigHash = desiredRetryHash,
+                                appliedConfigVersionEpochMillis = desiredRetry.configVersionEpochMillis,
+                                appliedConfigHash = desiredRetryHash,
+                                policyApplyStatus = "SUCCESS",
+                                policyAppliedAtEpochMillis = System.currentTimeMillis()
+                            )
+                        )
+                        CommandExecResult(success = true, output = "Config already synced")
+                    } else {
+                        Log.i(
+                            handleTag,
+                            "sync_config consistency retry required commandId=$commandId leaseToken=$leaseToken " +
+                                    "firstVersion=${desired.configVersionEpochMillis} firstHash=$desiredHash " +
+                                    "retryVersion=${desiredRetry.configVersionEpochMillis} retryHash=$desiredRetryHash"
+                        )
+                        val result = loadConfig(context, source = "command:sync_config:consistency_retry")
+                        if (result.success) {
+                            CommandExecResult(success = true, output = "Config synced after consistency retry")
+                        } else {
+                            CommandExecResult(
+                                success = false,
+                                error = result.error ?: "Sync config consistency retry failed",
+                                errorCode = result.errorCode ?: "SYNC_CONFIG_FAILED"
+                            )
+                        }
+                    }
                 } else {
                     val result = loadConfig(context, source = "command:sync_config")
                     if (result.success) {
@@ -2202,14 +2620,22 @@ class LauncherViewModel : ViewModel() {
                             handleTag,
                             "lock_screen containment commandId=$commandId leaseToken=$leaseToken status=${finalContainmentStatus.status} errorCode=${finalContainmentStatus.errorCode}"
                         )
-                        stopTelemetryLoops()
-                        _state.value = _state.value.copy(
+                        val currentState = _state.value
+                        val commandOverlayActive = !currentState.adminLocked
+                        _state.value = currentState.copy(
                             loading = false,
                             lockState = DeviceLockState.LOCKED,
+                            commandScreenLocked = commandOverlayActive,
+                            noProfileLocked = false,
+                            lockReason = if (currentState.adminLocked) ADMIN_LOCKED_MESSAGE else COMMAND_SCREEN_LOCKED_MESSAGE,
+                            unlockError = null,
                             lockContainmentStatus = finalContainmentStatus.status,
-                            lockContainmentErrorCode = finalContainmentStatus.errorCode,
-                            config = null,
-                            apps = emptyList()
+                            lockContainmentErrorCode = finalContainmentStatus.errorCode
+                        )
+                        logRuntimeLockOverlay(source = "command:lock_screen")
+                        Log.i(
+                            "MDM_COMMAND_LOCK",
+                            "commandScreenLocked=$commandOverlayActive adminLocked=${_state.value.adminLocked} commandId=$commandId"
                         )
                         startCommandPollLoop(context)
                         _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
@@ -2286,14 +2712,56 @@ class LauncherViewModel : ViewModel() {
         cachedDeviceCode = null
     }
 
+    private fun emitAllowedAppsUpdatedIfChanged(
+        previousPackages: List<String>,
+        updatedPackages: List<String>,
+        source: String
+    ) {
+        val previousSignature = normalizePackageSignature(previousPackages)
+        val updatedSignature = normalizePackageSignature(updatedPackages)
+        if (previousSignature == updatedSignature) return
+        if (previousSignature.isEmpty()) {
+            lastAllowedAppsSignature = updatedSignature
+            lastAllowedAppsSignalAtMs = System.currentTimeMillis()
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val isDuplicateBurst = updatedSignature == lastAllowedAppsSignature &&
+            now - lastAllowedAppsSignalAtMs in 0 until allowedAppsSignalDedupWindowMs
+        if (isDuplicateBurst) {
+            Log.i(tag, "allowed-apps event skipped source=$source reason=dedup signature=$updatedSignature")
+            return
+        }
+
+        lastAllowedAppsSignature = updatedSignature
+        lastAllowedAppsSignalAtMs = now
+        _commandActions.tryEmit(LauncherCommandAction.AllowedAppsUpdated)
+    }
+
+    private fun normalizePackageSignature(packages: List<String>): String {
+        return packages
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
+            .joinToString("|")
+    }
+
     private fun resolveCurrentDeviceCode(context: Context, reason: String): String {
         val current = DeviceRuntimeIdentity.getDeviceCode(context)
+        val currentDisplayName = DeviceRuntimeIdentity.getDeviceDisplayName()
         val previous = cachedDeviceCode
         if (previous != null && previous != current) {
             Log.w(tag, "deviceCode changed reason=$reason old=$previous new=$current -> clear session")
             clearToken()
         }
         cachedDeviceCode = current
+        val snapshot = _state.value
+        if (snapshot.deviceCode != current || snapshot.deviceDisplayName != currentDisplayName) {
+            _state.value = snapshot.copy(deviceCode = current, deviceDisplayName = currentDisplayName)
+        }
         return current
     }
 
@@ -2536,33 +3004,6 @@ class LauncherViewModel : ViewModel() {
         null -> "unknown"
     }
 
-    private data class AppUsageEntry(
-        val packageName: String,
-        val startMs: Long,
-        val endMs: Long,
-        val durationMs: Long
-    )
-
-    private fun collectAppUsage(context: Context, startMs: Long, endMs: Long): List<AppUsageEntry> {
-        return runCatching {
-            val usm =
-                context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
-            usm.queryUsageStats(
-                android.app.usage.UsageStatsManager.INTERVAL_BEST,
-                startMs,
-                endMs
-            ).filter { it.totalTimeInForeground > 0 }
-                .map { s ->
-                    AppUsageEntry(
-                        packageName = s.packageName,
-                        startMs = s.firstTimeStamp,
-                        endMs = s.lastTimeStamp,
-                        durationMs = s.totalTimeInForeground
-                    )
-                }
-        }.getOrDefault(emptyList())
-    }
-
     private fun isDeviceCodeMismatch(e: MdmApi.ApiException): Boolean {
         return e.httpCode == 409 && e.backendCode == "DEVICE_CODE_MISMATCH"
     }
@@ -2570,6 +3011,11 @@ class LauncherViewModel : ViewModel() {
     private fun isDeviceLocked(e: MdmApi.ApiException): Boolean {
         val msg = e.message.lowercase()
         return e.httpCode == 423 || e.backendCode == "DEVICE_LOCKED" || msg.contains("locked")
+    }
+
+    private fun isAdminLocked(e: MdmApi.ApiException): Boolean {
+        val code = e.backendCode?.trim()?.uppercase()
+        return code == "DEVICE_ADMIN_LOCKED" || e.message.contains("locked by administrator", ignoreCase = true)
     }
 
     private fun isProfileNotLinked(e: MdmApi.ApiException): Boolean {
@@ -2605,11 +3051,17 @@ class LauncherViewModel : ViewModel() {
     private fun shouldStayLockedOnConfigUpdate(
         currentLockState: DeviceLockState,
         noProfileLocked: Boolean,
+        currentAdminLocked: Boolean,
+        commandScreenLocked: Boolean,
         source: String
     ): Boolean {
-        // Keep remote screen-lock lifecycle unless unlock explicitly succeeds.
-        // A no-profile lock is a setup gate and must clear once a valid profile config arrives.
-        return currentLockState == DeviceLockState.LOCKED && !noProfileLocked && source != "unlock"
+        // Command screen lock is local command state, separate from server-owned adminLocked.
+        // It survives config refreshes and clears only after a successful password unlock.
+        return currentLockState == DeviceLockState.LOCKED &&
+            commandScreenLocked &&
+            !noProfileLocked &&
+            !currentAdminLocked &&
+            source != "unlock"
     }
 
     private fun normalizeConfigErrorCode(e: MdmApi.ApiException): String {
@@ -2641,7 +3093,29 @@ class LauncherViewModel : ViewModel() {
                     unlockError = NO_PROFILE_UNLOCK_BLOCKED_MESSAGE,
                     unlockSubmitting = false
                 )
+                logRuntimeLockOverlay(source = "api_exception:profile_not_linked")
                 Log.i(tag, "MDM_UNLOCK state transition LOCKED source=api_exception noProfileLocked=true")
+                context?.let { startCommandPollLoop(it) }
+                _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
+            }
+
+            isAdminLocked(e) -> {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    lockState = DeviceLockState.LOCKED,
+                    noProfileLocked = false,
+                    adminLocked = true,
+                    commandScreenLocked = false,
+                    adminLockReason = e.message,
+                    lockReason = ADMIN_LOCKED_MESSAGE,
+                    lockContainmentStatus = "PENDING",
+                    lockContainmentErrorCode = null,
+                    error = if (duringConfig) ADMIN_LOCKED_MESSAGE else null,
+                    unlockError = null,
+                    unlockSubmitting = false
+                )
+                logRuntimeLockOverlay(source = "api_exception:admin_locked")
+                Log.i("MDM_ADMIN_LOCK", "state transition LOCKED source=api_exception backendCode=${e.backendCode} httpCode=${e.httpCode}")
                 context?.let { startCommandPollLoop(it) }
                 _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)
             }
@@ -2656,7 +3130,8 @@ class LauncherViewModel : ViewModel() {
                     loading = false,
                     lockState = DeviceLockState.LOCKED,
                     noProfileLocked = false,
-                    lockReason = null,
+                    commandScreenLocked = _state.value.commandScreenLocked,
+                    lockReason = if (_state.value.commandScreenLocked) COMMAND_SCREEN_LOCKED_MESSAGE else null,
                     lockContainmentStatus = "PENDING",
                     lockContainmentErrorCode = null,
                     config = null,
@@ -2665,6 +3140,7 @@ class LauncherViewModel : ViewModel() {
                     unlockError = if (duringConfig) null else e.message,
                     unlockSubmitting = false
                 )
+                logRuntimeLockOverlay(source = "api_exception:device_locked")
                 Log.i(tag, "MDM_UNLOCK state transition LOCKED source=api_exception noProfileLocked=false")
                 context?.let { startCommandPollLoop(it) }
                 _commandActions.tryEmit(LauncherCommandAction.BringMdmToFrontAndLock)

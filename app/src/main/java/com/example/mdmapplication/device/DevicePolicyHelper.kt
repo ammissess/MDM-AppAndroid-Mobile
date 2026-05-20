@@ -283,6 +283,7 @@ class DevicePolicyHelper(private val context: Context) {
 
     fun disableStatusBar(disabled: Boolean) {
         runCatching { dpm.setStatusBarDisabled(admin, disabled) }
+            .onSuccess { Log.i(tag, "setStatusBarDisabled($disabled) applied source=direct") }
             .onFailure { Log.w(tag, "disableStatusBar failed disabled=$disabled", it) }
     }
 
@@ -355,9 +356,13 @@ class DevicePolicyHelper(private val context: Context) {
         launcherPackage: String,
         allowedApps: List<String>,
         kioskMode: Boolean,
+        disableStatusBar: Boolean,
         reason: String
     ): PolicyApplyOutcome {
-        Log.i(tag, "runtime kiosk policy apply start reason=$reason allowedApps=${allowedApps.size} kioskMode=$kioskMode")
+        Log.i(
+            tag,
+            "runtime kiosk policy apply start reason=$reason allowedApps=${allowedApps.size} kioskMode=$kioskMode disableStatusBar=$disableStatusBar"
+        )
         if (!isDeviceOwner()) {
             Log.i(tag, "runtime kiosk policy apply skip reason=not_device_owner source=$reason")
             return PolicyApplyOutcome(
@@ -385,9 +390,13 @@ class DevicePolicyHelper(private val context: Context) {
                 Log.i(tag, "runtime kiosk policy lockTaskPackages skip reason=already_contains_desired source=$reason desired=${desiredSet.size}")
             } else {
                 setLockTaskPackagesStrict(desiredPackages)
-                applyLockTaskFeaturesStrict(kioskMode = kioskMode, lockedMode = false)
                 Log.i(tag, "runtime kiosk policy lockTaskPackages success reason=$reason desired=${desiredSet.size}")
             }
+            applyLockTaskFeaturesStrict(kioskMode = kioskMode, lockedMode = false)
+            runPolicyOrThrow("setStatusBarDisabled[$disableStatusBar]") {
+                dpm.setStatusBarDisabled(admin, disableStatusBar)
+            }
+            Log.i(tag, "setStatusBarDisabled applied disabled=$disableStatusBar source=runtime_kiosk_policy reason=$reason")
 
             when {
                 homeOutcome.status == "FAILED" -> homeOutcome
@@ -476,6 +485,7 @@ class DevicePolicyHelper(private val context: Context) {
         runPolicyOrThrow("setStatusBarDisabled[$disableStatusBar]") {
             dpm.setStatusBarDisabled(admin, disableStatusBar)
         }
+        Log.i(tag, "setStatusBarDisabled applied disabled=$disableStatusBar source=applyFromServerConfig")
         setUserRestrictionStrict(UserManager.DISALLOW_CONFIG_WIFI, disableWifi)
         setUserRestrictionStrict(UserManager.DISALLOW_BLUETOOTH, disableBluetooth)
         runPolicyOrThrow("setCameraDisabled[$disableCamera]") {
@@ -801,6 +811,10 @@ class DevicePolicyHelper(private val context: Context) {
             )
             return outcome
         }
+
+        runCatching { dpm.setStatusBarDisabled(adminComponent, true) }
+            .onSuccess { Log.i(tag, "setStatusBarDisabled(true) applied source=strict_locked_containment") }
+            .onFailure { Log.w(tag, "setStatusBarDisabled(true) failed source=strict_locked_containment", it) }
 
         runCatching {
             dpm.setLockTaskPackages(adminComponent, arrayOf(selfPackage))

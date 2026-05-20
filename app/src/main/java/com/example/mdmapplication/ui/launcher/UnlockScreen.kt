@@ -57,6 +57,8 @@ fun UnlockScreen(
     error: String?,
     lockReason: String?,
     noProfileLocked: Boolean,
+    adminLocked: Boolean,
+    commandScreenLocked: Boolean,
     lockedState: DeviceLockState,
     lockContainmentStatus: String?,
     lockContainmentErrorCode: String?,
@@ -104,8 +106,8 @@ fun UnlockScreen(
         previousError = error
     }
 
-    LaunchedEffect(lockedState) {
-        if (lockedState == DeviceLockState.LOCKED) {
+    LaunchedEffect(lockedState, adminLocked) {
+        if (lockedState == DeviceLockState.LOCKED && !adminLocked) {
             delay(250L)
             runCatching { focusRequester.requestFocus() }
                 .onFailure { Log.w("MDM_UNLOCK_UI", "focus request failed", it) }
@@ -116,7 +118,19 @@ fun UnlockScreen(
     }
 
     val noProfileMessageVisible = noProfileLocked || isNoProfileLockReason(lockReason)
+    val adminLockedVisible = adminLocked || isAdminLockedReason(lockReason) || isAdminLockedReason(error)
     val displayError = unlockErrorMessage(error, noProfileLocked, language)
+    val commandLockedVisible = commandScreenLocked && !adminLockedVisible
+    val titleText = when {
+        adminLockedVisible -> strings.adminLockedTitle
+        commandLockedVisible -> strings.commandLockedTitle
+        else -> strings.title
+    }
+    val descriptionText = when {
+        adminLockedVisible -> strings.adminLockedDescription
+        commandLockedVisible -> strings.commandLockedDescription
+        else -> strings.description
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -151,14 +165,14 @@ fun UnlockScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text(
-                        text = strings.title,
+                        text = titleText,
                         color = UnlockText,
                         style = MaterialTheme.typography.headlineSmall,
                         textAlign = TextAlign.Center
                     )
 
                     Text(
-                        text = strings.description,
+                        text = descriptionText,
                         color = UnlockMuted,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center
@@ -167,6 +181,15 @@ fun UnlockScreen(
                     if (noProfileMessageVisible) {
                         Text(
                             text = strings.noProfileLocked,
+                            color = UnlockError,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    if (adminLockedVisible) {
+                        Text(
+                            text = strings.contactAdmin,
                             color = UnlockError,
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center
@@ -182,61 +205,63 @@ fun UnlockScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(4.dp))
+                    if (!adminLockedVisible) {
+                        Spacer(modifier = Modifier.height(4.dp))
 
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text(strings.passwordLabel) },
-                        singleLine = true,
-                        isError = displayError != null,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.White.copy(alpha = 0.05f),
-                            unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
-                            disabledContainerColor = Color.White.copy(alpha = 0.05f),
-                            errorContainerColor = Color.White.copy(alpha = 0.05f),
-                            focusedTextColor = UnlockText,
-                            unfocusedTextColor = UnlockText,
-                            focusedLabelColor = UnlockMuted,
-                            unfocusedLabelColor = UnlockMuted,
-                            cursorColor = Color(0xFF7CCBFF),
-                            focusedIndicatorColor = Color(0xFF7CCBFF),
-                            unfocusedIndicatorColor = Color.White.copy(alpha = 0.18f),
-                            errorIndicatorColor = UnlockError,
-                            errorLabelColor = UnlockError
-                        )
-                    )
-
-                    if (displayError != null) {
-                        Text(
-                            text = displayError,
-                            color = UnlockError,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            Log.i(
-                                "MDM_UNLOCK_UI",
-                                "button clicked passwordLength=${password.length} lockedState=${lockedState.name} noProfileLocked=$noProfileLocked loading=$loading unlockSubmitting=$unlockSubmitting"
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text(strings.passwordLabel) },
+                            singleLine = true,
+                            isError = displayError != null,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.White.copy(alpha = 0.05f),
+                                unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+                                disabledContainerColor = Color.White.copy(alpha = 0.05f),
+                                errorContainerColor = Color.White.copy(alpha = 0.05f),
+                                focusedTextColor = UnlockText,
+                                unfocusedTextColor = UnlockText,
+                                focusedLabelColor = UnlockMuted,
+                                unfocusedLabelColor = UnlockMuted,
+                                cursorColor = Color(0xFF7CCBFF),
+                                focusedIndicatorColor = Color(0xFF7CCBFF),
+                                unfocusedIndicatorColor = Color.White.copy(alpha = 0.18f),
+                                errorIndicatorColor = UnlockError,
+                                errorLabelColor = UnlockError
                             )
-                            onUnlock(password)
-                        },
-                        enabled = password.isNotBlank() && !unlockSubmitting,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF7CCBFF),
-                            contentColor = Color(0xFF07111E)
                         )
-                    ) {
-                        Text(if (unlockSubmitting) strings.submitting else strings.unlockButton)
+
+                        if (displayError != null) {
+                            Text(
+                                text = displayError,
+                                color = UnlockError,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                Log.i(
+                                    "MDM_UNLOCK_UI",
+                                    "button clicked passwordLength=${password.length} lockedState=${lockedState.name} noProfileLocked=$noProfileLocked loading=$loading unlockSubmitting=$unlockSubmitting"
+                                )
+                                onUnlock(password)
+                            },
+                            enabled = password.isNotBlank() && !unlockSubmitting,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF7CCBFF),
+                                contentColor = Color(0xFF07111E)
+                            )
+                        ) {
+                            Text(if (unlockSubmitting) strings.submitting else strings.unlockButton)
+                        }
                     }
                 }
             }
@@ -247,6 +272,11 @@ fun UnlockScreen(
 private data class UnlockStrings(
     val title: String,
     val description: String,
+    val adminLockedTitle: String,
+    val adminLockedDescription: String,
+    val commandLockedTitle: String,
+    val commandLockedDescription: String,
+    val contactAdmin: String,
     val noProfileLocked: String,
     val passwordLabel: String,
     val unlockButton: String,
@@ -265,6 +295,11 @@ private fun unlockStrings(language: AppLanguage): UnlockStrings =
         AppLanguage.VI -> UnlockStrings(
             title = "Thiết bị đang bị khóa",
             description = "Nhập mã mở khóa do quản trị viên cung cấp để tiếp tục sử dụng thiết bị.",
+            adminLockedTitle = "Thiết bị đang bị khóa bởi quản trị viên",
+            adminLockedDescription = "Chỉ quản trị viên có thể mở khóa thiết bị này từ dashboard.",
+            commandLockedTitle = "Màn hình đang bị khóa",
+            commandLockedDescription = "Nhập mật khẩu mở khóa do quản trị viên cung cấp để tiếp tục sử dụng thiết bị.",
+            contactAdmin = "Vui lòng liên hệ quản trị viên.",
             noProfileLocked = "Thiết bị chưa được gán hồ sơ cấu hình. Vui lòng liên hệ quản trị viên.",
             passwordLabel = "Mã mở khóa",
             unlockButton = "Mở khóa thiết bị",
@@ -282,6 +317,11 @@ private fun unlockStrings(language: AppLanguage): UnlockStrings =
         AppLanguage.EN -> UnlockStrings(
             title = "Device is locked",
             description = "Enter the unlock code from your administrator to continue using this device.",
+            adminLockedTitle = "Device is locked by an administrator",
+            adminLockedDescription = "Only an administrator can unlock this device from the dashboard.",
+            commandLockedTitle = "Screen is locked",
+            commandLockedDescription = "Enter the unlock password provided by your administrator to continue using this device.",
+            contactAdmin = "Contact your administrator.",
             noProfileLocked = "This device has not been assigned a configuration profile. Contact your administrator.",
             passwordLabel = "Unlock code",
             unlockButton = "Unlock device",
@@ -309,6 +349,14 @@ private fun containmentStatusText(
     }.let { text ->
         if (BuildConfig.DEBUG && !errorCode.isNullOrBlank()) "$text ($errorCode)" else text
     }
+}
+
+private fun isAdminLockedReason(value: String?): Boolean {
+    val normalized = value?.trim()?.lowercase() ?: return false
+    return normalized.contains("khóa bởi quản trị viên") ||
+        normalized.contains("khoa boi quan tri vien") ||
+        normalized.contains("locked by administrator") ||
+        normalized.contains("device_admin_locked")
 }
 
 private fun unlockErrorMessage(error: String?, noProfileLocked: Boolean, language: AppLanguage): String? {
