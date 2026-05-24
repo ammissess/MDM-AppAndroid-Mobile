@@ -18,6 +18,8 @@ import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import android.view.View
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -46,6 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.mdmapplication.R
 import com.example.mdmapplication.device.DevicePolicyHelper
@@ -517,6 +522,7 @@ class LauncherActivity : ComponentActivity() {
         } else {
             policy.disableStatusBar(false)
             Log.i(tag, "setStatusBarDisabled(false) requested reason=$reason")
+            restoreUnlockedSystemBars(reason)
         }
 
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
@@ -538,6 +544,26 @@ class LauncherActivity : ComponentActivity() {
                 .onSuccess { Log.i(tag, "stopLockTask enforced reason=$reason modeBefore=$lockTaskModeState") }
                 .onFailure { Log.w(tag, "stopLockTask enforced failed reason=$reason modeBefore=$lockTaskModeState", it) }
         }
+    }
+
+    private fun restoreUnlockedSystemBars(reason: String) {
+        val decorView = window.decorView
+        val flagsBefore = decorView.systemUiVisibility
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        WindowInsetsControllerCompat(window, decorView).show(WindowInsetsCompat.Type.statusBars())
+        @Suppress("DEPRECATION")
+        decorView.systemUiVisibility =
+            flagsBefore and View.SYSTEM_UI_FLAG_FULLSCREEN.inv() and
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION.inv() and
+                    View.SYSTEM_UI_FLAG_IMMERSIVE.inv() and
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY.inv() and
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN.inv() and
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION.inv()
+        Log.i(
+            lockContainmentTag,
+            "systemUi restore reason=$reason flagsBefore=$flagsBefore flagsAfter=${decorView.systemUiVisibility}"
+        )
     }
 
     private fun readAppLanguage(): AppLanguage? =
