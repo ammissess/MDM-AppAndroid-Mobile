@@ -410,4 +410,4 @@ $concurrentActual = $running.Count
 $stressDevices = $provisioned | Select-Object avd,serial,deviceCode
 $stressDevices | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'avd-device-map.json') -Encoding UTF8
 
-$deviceFile = Join-Path
+$deviceFile = Join
