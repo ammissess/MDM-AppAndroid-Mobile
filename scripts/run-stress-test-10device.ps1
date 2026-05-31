@@ -18,11 +18,35 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 $timeline = New-Object System.Collections.Generic.List[object]
 $memoryLog = New-Object System.Collections.Generic.List[object]
 
-function Add-TimelineEvent { param([string]$Event,[string]$Avd='',[string]$Serial='',[string]$Status='',[string]$Note='') $script:timeline.Add([pscustomobject]@{timestamp=(Get-Date -Format o);event=$Event;avd=$Avd;serial=$Serial;status=$Status;note=$Note}) | Out-Null }
-function Add-MemoryWatchdogRecord { param([string]$Phase,[int]$FreeMB,[bool]$Safe,[string]$Action='',[string]$Note='') $script:memoryLog.Add([pscustomobject]@{timestamp=(Get-Date -Format o);phase=$Phase;freeRamMB=$FreeMB;safe=$Safe;action=$Action;note=$Note}) | Out-Null }
-function Test-MemorySafe { param([int]$MinFreeMB=4000,[string]$Phase='check') $freeMB=[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024); $safe=$freeMB -gt $MinFreeMB; if(-not $safe){Write-Warning "LOW MEMORY: Free=$freeMB MB < threshold=$MinFreeMB MB"}; Add-MemoryWatchdogRecord -Phase $Phase -FreeMB $freeMB -Safe $safe -Note "threshold=$MinFreeMB MB"; return [pscustomobject]@{FreeMB=$freeMB;Safe=$safe} }
-function New-AuthHeaderStress { param([string]$Token) @{ Authorization = "Bearer $Token" } }
-function Get-SdkRootPath { if($env:ANDROID_HOME){$env:ANDROID_HOME}elseif($env:ANDROID_SDK_ROOT){$env:ANDROID_SDK_ROOT}else{Join-Path $env:LOCALAPPDATA 'Android\Sdk'} }
+function Add-TimelineEvent {
+    param([string]$Event,[string]$Avd='',[string]$Serial='',[string]$Status='',[string]$Note='')
+    $script:timeline.Add([pscustomobject]@{timestamp=(Get-Date -Format o);event=$Event;avd=$Avd;serial=$Serial;status=$Status;note=$Note}) | Out-Null
+}
+
+function Add-MemoryWatchdogRecord {
+    param([string]$Phase,[int]$FreeMB,[bool]$Safe,[string]$Action='',[string]$Note='')
+    $script:memoryLog.Add([pscustomobject]@{timestamp=(Get-Date -Format o);phase=$Phase;freeRamMB=$FreeMB;safe=$Safe;action=$Action;note=$Note}) | Out-Null
+}
+
+function Test-MemorySafe {
+    param([int]$MinFreeMB=4000,[string]$Phase='check')
+    $freeMB=[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024)
+    $safe=$freeMB -gt $MinFreeMB
+    if(-not $safe){ Write-Warning "LOW MEMORY: Free=$freeMB MB < threshold=$MinFreeMB MB" }
+    Add-MemoryWatchdogRecord -Phase $Phase -FreeMB $freeMB -Safe $safe -Note "threshold=$MinFreeMB MB"
+    return [pscustomobject]@{FreeMB=$freeMB;Safe=$safe}
+}
+
+function New-AuthHeaderStress {
+    param([string]$Token)
+    @{ Authorization = "Bearer $Token" }
+}
+
+function Get-SdkRootPath {
+    if($env:ANDROID_HOME){$env:ANDROID_HOME}
+    elseif($env:ANDROID_SDK_ROOT){$env:ANDROID_SDK_ROOT}
+    else{Join-Path $env:LOCALAPPDATA 'Android\Sdk'}
+}
 
 function Write-ContentSafe {
     param([string]$Path, [string]$Value, [int]$Retries = 8, [int]$DelayMs = 500)
@@ -55,8 +79,25 @@ function Ensure-AdbServer {
     }
 }
 
-function Invoke-AdbStress { param([string[]]$Args,[int]$TimeoutSec=30) $p=Start-Process -FilePath $script:adbExe -ArgumentList $Args -NoNewWindow -PassThru -RedirectStandardOutput "adb-out.txt" -RedirectStandardError "adb-err.txt"; if(-not $p.WaitForExit($TimeoutSec*1000)){try{$p.Kill()}catch{}; return [pscustomobject]@{ExitCode=124;Stdout='';Stderr='timeout'}}; return [pscustomobject]@{ExitCode=$p.ExitCode;Stdout=(Get-Content "adb-out.txt" -Raw);Stderr=''} }
-function Get-TotalPssFromText { param([string]$Text) $m=[regex]::Match($Text,'TOTAL PSS:\s+(\d+)'); if($m.Success){return [int64]$m.Groups[1].Value}; $m=[regex]::Match($Text,'\bTOTAL\s+(\d+)'); if($m.Success){return [int64]$m.Groups[1].Value}; return $null }
+function Invoke-AdbStress {
+    param([string[]]$Args,[int]$TimeoutSec=30)
+    $p=Start-Process -FilePath $script:adbExe -ArgumentList $Args -NoNewWindow -PassThru -RedirectStandardOutput "adb-out.txt" -RedirectStandardError "adb-err.txt"
+    if(-not $p.WaitForExit($TimeoutSec*1000)){
+        try{$p.Kill()}catch{}
+        return [pscustomobject]@{ExitCode=124;Stdout='';Stderr='timeout'}
+    }
+    return [pscustomobject]@{ExitCode=$p.ExitCode;Stdout=(Get-Content "adb-out.txt" -Raw);Stderr=''}
+}
+
+function Get-TotalPssFromText {
+    param([string]$Text)
+    $m=[regex]::Match($Text,'TOTAL PSS:\s+(\d+)')
+    if($m.Success){return [int64]$m.Groups[1].Value}
+    $m=[regex]::Match($Text,'\bTOTAL\s+(\d+)')
+    if($m.Success){return [int64]$m.Groups[1].Value}
+    return $null
+}
+
 function Invoke-ApiJsonStress {
     param([string]$Method,[string]$Endpoint,[object]$Body=$null,[hashtable]$Headers=@{})
     $json=$null; if($null -ne $Body){$json=$Body|ConvertTo-Json -Depth 20 -Compress}
@@ -131,10 +172,6 @@ function Start-ProvisionStressAvd {
     $deviceDir=Join-Path $out "device-$AvdName"
     New-Item -ItemType Directory -Force -Path $deviceDir | Out-Null
 
-    # Use a per-device lock file to prevent concurrent writes to device-summary.json
-    # from racing between provisioning iterations.
-    $lockFile = Join-Path $deviceDir '.provision-lock'
-
     $memCheck=Test-MemorySafe -MinFreeMB 4000 -Phase "pre_boot_$AvdName"
     if(-not $memCheck.Safe){
         Add-TimelineEvent -Event 'boot_skip' -Avd $AvdName -Serial $serial -Status 'LOW_MEMORY' -Note "free=$($memCheck.FreeMB) MB"
@@ -148,8 +185,8 @@ function Start-ProvisionStressAvd {
     Ensure-AdbServer
 
     Add-TimelineEvent -Event 'boot_start' -Avd $AvdName -Serial $serial
-    $args=@('-avd',$AvdName,'-port',"$Port",'-memory',"$RamMB",'-no-window','-no-audio','-no-snapshot-save','-no-snapshot-load','-no-boot-anim','-gpu','guest','-partition-size','2048','-wipe-data')
-    $proc=Start-Process -FilePath $script:emulatorExe -ArgumentList $args -WindowStyle Hidden -PassThru
+    $emulatorArgs=@('-avd',$AvdName,'-port',"$Port",'-memory',"$RamMB",'-no-window','-no-audio','-no-snapshot-save','-no-snapshot-load','-no-boot-anim','-gpu','guest','-partition-size','2048','-wipe-data')
+    $proc=Start-Process -FilePath $script:emulatorExe -ArgumentList $emulatorArgs -WindowStyle Hidden -PassThru
 
     if(-not (Wait-ForBootStress -Serial $serial -TimeoutSec 180)){
         Add-TimelineEvent -Event 'boot_retry' -Avd $AvdName -Serial $serial -Status 'FIRST_ATTEMPT_FAILED' -Note 'retry with swiftshader_indirect; restarting ADB first'
@@ -181,11 +218,11 @@ function Start-ProvisionStressAvd {
     $dpm = & $script:adbExe -s $serial shell dpm list-owners 2>&1
     $dpm | Set-Content -LiteralPath (Join-Path $deviceDir 'dpm-verify.txt') -Encoding UTF8
     $modelLine = (& $script:adbExe -s $serial shell getprop ro.product.model 2>$null | Select-Object -First 1)
-    $sdkLine = (& $script:adbExe -s $serial shell getprop ro.build.version.sdk 2>$null | Select-Object -First 1)
+    $sdkLine   = (& $script:adbExe -s $serial shell getprop ro.build.version.sdk 2>$null | Select-Object -First 1)
     $model = if($null -ne $modelLine){$modelLine.ToString().Trim()}else{''}
-    $sdk = if($null -ne $sdkLine){$sdkLine.ToString().Trim()}else{''}
-    $mem = & $script:adbExe -s $serial shell dumpsys meminfo com.example.mdmapplication 2>$null
-    $mem | Set-Content -LiteralPath (Join-Path $deviceDir 'meminfo-before.txt') -Encoding UTF8
+    $sdk   = if($null -ne $sdkLine){$sdkLine.ToString().Trim()}else{''}
+    $memInfo = & $script:adbExe -s $serial shell dumpsys meminfo com.example.mdmapplication 2>$null
+    $memInfo | Set-Content -LiteralPath (Join-Path $deviceDir 'meminfo-before.txt') -Encoding UTF8
     & $script:adbExe -s $serial logcat -c 2>$null
     $deviceCode = ('stress{0:D2}{1}' -f ([int]($AvdName -replace '\D','')), ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString().Substring(5)))
 
@@ -241,43 +278,89 @@ function Start-MetricsJob {
     }
 }
 
-# Environment
-$script:sdkRoot=Get-SdkRootPath
-$script:adbExe=Join-Path $sdkRoot 'platform-tools\adb.exe'
-$script:emulatorExe=Join-Path $sdkRoot 'emulator\emulator.exe'
-$script:avdManager=Join-Path $sdkRoot 'cmdline-tools\latest\bin\avdmanager.bat'
-$script:sdkManager=Join-Path $sdkRoot 'cmdline-tools\latest\bin\sdkmanager.bat'
+# ── Environment ──────────────────────────────────────────────────────────────
+$script:sdkRoot     = Get-SdkRootPath
+$script:adbExe      = Join-Path $sdkRoot 'platform-tools\adb.exe'
+$script:emulatorExe = Join-Path $sdkRoot 'emulator\emulator.exe'
+$script:avdManager  = Join-Path $sdkRoot 'cmdline-tools\latest\bin\avdmanager.bat'
+$script:sdkManager  = Join-Path $sdkRoot 'cmdline-tools\latest\bin\sdkmanager.bat'
 
 # Ensure ADB is healthy at startup
 Ensure-AdbServer
 
-$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1 Name,NumberOfCores,NumberOfLogicalProcessors
-$mem=Get-CimInstance Win32_ComputerSystem | Select-Object -First 1 TotalPhysicalMemory
-$osRaw=Get-CimInstance Win32_OperatingSystem
-$os=$osRaw | Select-Object -First 1 Caption,Version,OSArchitecture
-$freeRamStartMB=[math]::Round($osRaw.FreePhysicalMemory / 1024)
-$safeFreeMB=4000
-$availableForAvds=$freeRamStartMB - $safeFreeMB
-$memoryConcurrentMax=[math]::Min(7,[math]::Max(0,[math]::Floor($availableForAvds / $AvdRamMB)))
-$effectiveConcurrentMax=[math]::Min($ConcurrentMax,$memoryConcurrentMax)
-$initialMemorySafe=$effectiveConcurrentMax -ge 3
-$memoryBudget=[pscustomobject]@{totalRamGB=[math]::Round($mem.TotalPhysicalMemory/1GB,1);freeRamStartMB=$freeRamStartMB;avdRamMB=$AvdRamMB;safeFreeMB=$safeFreeMB;availableForAvdsMB=$availableForAvds;memoryConcurrentMax=$memoryConcurrentMax;requestedConcurrentMax=$ConcurrentMax;effectiveConcurrentMax=$effectiveConcurrentMax;initialMemorySafe=$initialMemorySafe;recommendation='Close IntelliJ IDEA, Android Studio, and heavy browsers if free RAM is low.'}
-Add-MemoryWatchdogRecord -Phase 'environment_start' -FreeMB $freeRamStartMB -Safe $initialMemorySafe -Note "effectiveConcurrentMax=$effectiveConcurrentMax; avdRamMB=$AvdRamMB"
-$health=Invoke-WebRequest -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 10 -UseBasicParsing
-$existingAvds=@(Get-ChildItem "$env:USERPROFILE\.android\avd" -Filter '*.ini' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName })
-$batchStrategy = if($effectiveConcurrentMax -ge 5){"lightweight rolling batch, max $effectiveConcurrentMax concurrent AVDs"}elseif($effectiveConcurrentMax -ge 3){"lightweight fallback, max $effectiveConcurrentMax concurrent AVDs due free RAM"}else{'blocked: free RAM below minimum for 3 AVDs'}
-[pscustomobject]@{generatedAt=(Get-Date -Format o);cpu=$cpu;memory=$mem;os=$os;backendHealthStatus=$health.StatusCode;sdkRoot=$sdkRoot;adbVersion=(& $adbExe version | Select-Object -First 2);emulatorVersion=(& $emulatorExe -version 2>&1 | Select-Object -First 1);existingAvds=$existingAvds;requestedDevices=$DeviceCount;requestedConcurrentMax=$ConcurrentMax;avdRamConfigMB=$AvdRamMB;memoryBudget=$memoryBudget;batchStrategy=$batchStrategy} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $out 'environment.json') -Encoding UTF8
-Add-TimelineEvent -Event 'environment' -Status 'OK' -Note $batchStrategy
-if(-not $initialMemorySafe){ throw "BLOCKED_LOW_MEMORY: free RAM $freeRamStartMB MB allows only $effectiveConcurrentMax AVDs at ${AvdRamMB}MB with ${safeFreeMB}MB safety reserve." }
-if(-not $SkipBuild -or -not (Test-Path 'app\build\outputs\apk\debug\app-debug.apk')){ & .\gradlew.bat :app:assembleDebug }
-$apkPath=(Get-Item 'app\build\outputs\apk\debug\app-debug.apk').FullName
-$systemImage="system-images;android-$Api;google_apis;x86_64"
-if(Test-Path -LiteralPath $sdkManager){ & $sdkManager --install $systemImage | Out-File (Join-Path $out 'sdkmanager.log') }
-$avdNames=@(1..$DeviceCount | ForEach-Object { 'MDM_STRESS_{0:D2}_API36' -f $_ })
+$cpu    = Get-CimInstance Win32_Processor      | Select-Object -First 1 -Property Name,NumberOfCores,NumberOfLogicalProcessors
+$mem    = Get-CimInstance Win32_ComputerSystem | Select-Object -First 1 -Property TotalPhysicalMemory
+$osRaw  = Get-CimInstance Win32_OperatingSystem
+$os     = $osRaw | Select-Object -First 1 -Property Caption,Version,OSArchitecture
 
-$created=0
+$freeRamStartMB      = [math]::Round($osRaw.FreePhysicalMemory / 1024)
+$safeFreeMB          = 4000
+$availableForAvds    = $freeRamStartMB - $safeFreeMB
+$memoryConcurrentMax = [math]::Min(7,[math]::Max(0,[math]::Floor($availableForAvds / $AvdRamMB)))
+$effectiveConcurrentMax = [math]::Min($ConcurrentMax,$memoryConcurrentMax)
+$initialMemorySafe   = $effectiveConcurrentMax -ge 3
+
+$memoryBudget = [pscustomobject]@{
+    totalRamGB            = [math]::Round($mem.TotalPhysicalMemory/1GB,1)
+    freeRamStartMB        = $freeRamStartMB
+    avdRamMB              = $AvdRamMB
+    safeFreeMB            = $safeFreeMB
+    availableForAvdsMB    = $availableForAvds
+    memoryConcurrentMax   = $memoryConcurrentMax
+    requestedConcurrentMax= $ConcurrentMax
+    effectiveConcurrentMax= $effectiveConcurrentMax
+    initialMemorySafe     = $initialMemorySafe
+    recommendation        = 'Close IntelliJ IDEA, Android Studio, and heavy browsers if free RAM is low.'
+}
+
+Add-MemoryWatchdogRecord -Phase 'environment_start' -FreeMB $freeRamStartMB -Safe $initialMemorySafe -Note "effectiveConcurrentMax=$effectiveConcurrentMax; avdRamMB=$AvdRamMB"
+
+$health       = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 10 -UseBasicParsing
+$existingAvds = @(Get-ChildItem "$env:USERPROFILE\.android\avd" -Filter '*.ini' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName })
+$batchStrategy = if($effectiveConcurrentMax -ge 5){"lightweight rolling batch, max $effectiveConcurrentMax concurrent AVDs"}
+                 elseif($effectiveConcurrentMax -ge 3){"lightweight fallback, max $effectiveConcurrentMax concurrent AVDs due free RAM"}
+                 else{'blocked: free RAM below minimum for 3 AVDs'}
+
+[pscustomobject]@{
+    generatedAt          = (Get-Date -Format o)
+    cpu                  = $cpu
+    memory               = $mem
+    os                   = $os
+    backendHealthStatus  = $health.StatusCode
+    sdkRoot              = $sdkRoot
+    adbVersion           = (& $script:adbExe version | Select-Object -First 2)
+    emulatorVersion      = (& $script:emulatorExe -version 2>&1 | Select-Object -First 1)
+    existingAvds         = $existingAvds
+    requestedDevices     = $DeviceCount
+    requestedConcurrentMax = $ConcurrentMax
+    avdRamConfigMB       = $AvdRamMB
+    memoryBudget         = $memoryBudget
+    batchStrategy        = $batchStrategy
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $out 'environment.json') -Encoding UTF8
+
+Add-TimelineEvent -Event 'environment' -Status 'OK' -Note $batchStrategy
+
+if(-not $initialMemorySafe){
+    throw "BLOCKED_LOW_MEMORY: free RAM $freeRamStartMB MB allows only $effectiveConcurrentMax AVDs at ${AvdRamMB}MB with ${safeFreeMB}MB safety reserve."
+}
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+if(-not $SkipBuild -or -not (Test-Path 'app\build\outputs\apk\debug\app-debug.apk')){
+    & .\gradlew.bat :app:assembleDebug
+}
+$apkPath = (Get-Item 'app\build\outputs\apk\debug\app-debug.apk').FullName
+
+# ── SDK image ─────────────────────────────────────────────────────────────────
+$systemImage = "system-images;android-$Api;google_apis;x86_64"
+if(Test-Path -LiteralPath $script:sdkManager){
+    & $script:sdkManager --install $systemImage | Out-File (Join-Path $out 'sdkmanager.log')
+}
+
+# ── AVD names ─────────────────────────────────────────────────────────────────
+$avdNames = @(1..$DeviceCount | ForEach-Object { 'MDM_STRESS_{0:D2}_API36' -f $_ })
+
+$created = 0
 if ($SkipAvdCreate) {
-    # Count existing AVDs without recreating them
     foreach ($name in $avdNames) {
         $avdDir = Join-Path $env:USERPROFILE ".android\avd\$name.avd"
         if (Test-Path -LiteralPath $avdDir) {
@@ -288,29 +371,41 @@ if ($SkipAvdCreate) {
         }
     }
 } else {
-    foreach($name in $avdNames){ if(Ensure-StressAvd -Name $name -Package $systemImage -DeviceName 'pixel_6' -RamMB $AvdRamMB){ $created++ } }
+    foreach($name in $avdNames){
+        if(Ensure-StressAvd -Name $name -Package $systemImage -DeviceName 'pixel_6' -RamMB $AvdRamMB){ $created++ }
+    }
 }
 
-$provisioned=New-Object System.Collections.Generic.List[object]
-$running=New-Object System.Collections.Generic.List[object]
-$maxOnline=[Math]::Max(3,[Math]::Min($effectiveConcurrentMax,7))
-$basePort=5554
-for($i=0;$i -lt $avdNames.Count;$i++){
-    while($running.Count -ge $maxOnline){ $old=$running[0]; Stop-EmulatorRecord -Record $old -Reason 'rolling online cap'; $running.RemoveAt(0) }
-    $port=$basePort + ($i*2)
-    $memGate=Test-MemorySafe -MinFreeMB 4000 -Phase "boot_gate_$($avdNames[$i])"
+# ── Boot & provision loop ─────────────────────────────────────────────────────
+$provisioned = New-Object System.Collections.Generic.List[object]
+$running     = New-Object System.Collections.Generic.List[object]
+$maxOnline   = [Math]::Max(3,[Math]::Min($effectiveConcurrentMax,7))
+$basePort    = 5554
+
+for($i=0; $i -lt $avdNames.Count; $i++){
+    while($running.Count -ge $maxOnline){
+        $old = $running[0]
+        Stop-EmulatorRecord -Record $old -Reason 'rolling online cap'
+        $running.RemoveAt(0)
+    }
+    $port    = $basePort + ($i*2)
+    $memGate = Test-MemorySafe -MinFreeMB 4000 -Phase "boot_gate_$($avdNames[$i])"
     if(-not $memGate.Safe){
         Add-TimelineEvent -Event 'boot_gate_stop' -Avd $avdNames[$i] -Status 'LOW_MEMORY' -Note "free=$($memGate.FreeMB) MB; provisioned=$($provisioned.Count)"
         if($provisioned.Count -lt 3){ throw "BLOCKED_LOW_MEMORY: only $($provisioned.Count) AVD provisioned before memory gate stopped boot." }
         break
     }
-    $rec=Start-ProvisionStressAvd -AvdName $avdNames[$i] -Port $port -ApkPath $apkPath -RamMB $AvdRamMB
+    $rec = Start-ProvisionStressAvd -AvdName $avdNames[$i] -Port $port -ApkPath $apkPath -RamMB $AvdRamMB
     if($rec){ $provisioned.Add($rec)|Out-Null; $running.Add($rec)|Out-Null }
     Start-Sleep -Seconds 30
 }
-$concurrentActual=$running.Count
-$stressDevices=$provisioned | Select-Object avd,serial,deviceCode
+
+$concurrentActual = $running.Count
+
+# ── Save device map ───────────────────────────────────────────────────────────
+$stressDevices = $provisioned | Select-Object avd,serial,deviceCode
 $stressDevices | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'avd-device-map.json') -Encoding UTF8
-$deviceFile=Join-Path $out 'stress-devices.json'
-if($provisioned.Count -gt 0){
-    $metr
+
+$deviceFile = Join-Path $out 'stress-devices.json'
+
+if($provisioned.Count -
