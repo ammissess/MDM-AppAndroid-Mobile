@@ -25,14 +25,16 @@ function New-AuthHeaderStress { param([string]$Token) @{ Authorization = "Bearer
 function Get-SdkRootPath { if($env:ANDROID_HOME){$env:ANDROID_HOME}elseif($env:ANDROID_SDK_ROOT){$env:ANDROID_SDK_ROOT}else{Join-Path $env:LOCALAPPDATA 'Android\Sdk'} }
 
 function Write-ContentSafe {
-    param([string]$Path, [string]$Value, [int]$Retries = 5, [int]$DelayMs = 300)
+    param([string]$Path, [string]$Value, [int]$Retries = 8, [int]$DelayMs = 500)
     for ($i = 0; $i -lt $Retries; $i++) {
         try {
             [System.IO.File]::WriteAllText($Path, $Value, [System.Text.Encoding]::UTF8)
             return
         } catch [System.IO.IOException] {
             if ($i -lt ($Retries - 1)) {
-                Start-Sleep -Milliseconds $DelayMs
+                # Back off with jitter to reduce contention between concurrent provisioning jobs
+                $jitter = Get-Random -Minimum 0 -Maximum 200
+                Start-Sleep -Milliseconds ($DelayMs + $jitter)
             } else {
                 Write-Warning "Write-ContentSafe: could not write '$Path' after $Retries attempts: $_"
             }
@@ -48,7 +50,7 @@ function Ensure-AdbServer {
         & $script:adbExe kill-server 2>&1 | Out-Null
         Start-Sleep -Seconds 3
         & $script:adbExe start-server 2>&1 | Out-Null
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 5
         Add-TimelineEvent -Event 'adb_restart' -Status 'RECOVERED'
     }
 }
@@ -96,6 +98,24 @@ function Wait-ForBootStress {
             Start-Sleep -Seconds 3
             & $script:adbExe start-server 2>&1 | Out-Null
             Start-Sleep -Seconds 5
+
+            # After ADB restart, wait for the emulator serial to re-appear before polling boot prop.
+            # The emulator process is still running; ADB just needs to re-enumerate it.
+            Write-Host "Waiting for $Serial to re-appear in ADB after server restart..."
+            $reattachDeadline = (Get-Date).AddSeconds(60)
+            $reattached = $false
+            while ((Get-Date) -lt $reattachDeadline) {
+                $deviceList = & $script:adbExe devices 2>&1
+                if (($deviceList -join "`n") -match [regex]::Escape($Serial)) {
+                    $reattached = $true
+                    break
+                }
+                Start-Sleep -Seconds 3
+            }
+            if (-not $reattached) {
+                Write-Warning "Serial $Serial did not re-appear within 60s after ADB restart."
+                # Continue the outer loop; it will retry or hit the deadline naturally
+            }
         }
         $bootLine = (& $script:adbExe -s $Serial shell getprop sys.boot_completed 2>$null | Select-Object -First 1)
         $boot = if($null -ne $bootLine){$bootLine.ToString().Trim()}else{''}
@@ -110,6 +130,10 @@ function Start-ProvisionStressAvd {
     $serial="emulator-$Port"
     $deviceDir=Join-Path $out "device-$AvdName"
     New-Item -ItemType Directory -Force -Path $deviceDir | Out-Null
+
+    # Use a per-device lock file to prevent concurrent writes to device-summary.json
+    # from racing between provisioning iterations.
+    $lockFile = Join-Path $deviceDir '.provision-lock'
 
     $memCheck=Test-MemorySafe -MinFreeMB 4000 -Phase "pre_boot_$AvdName"
     if(-not $memCheck.Safe){
@@ -289,17 +313,4 @@ $stressDevices=$provisioned | Select-Object avd,serial,deviceCode
 $stressDevices | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'avd-device-map.json') -Encoding UTF8
 $deviceFile=Join-Path $out 'stress-devices.json'
 if($provisioned.Count -gt 0){
-    $metricsRecords=@($running | ForEach-Object { $_ })
-    $metricsJob=Start-MetricsJob -Records $metricsRecords -Minutes $DurationMinutes
-    $driverScript=Join-Path $PSScriptRoot 'run-api-stress-driver.ps1'
-    $deviceCodes=@($stressDevices | ForEach-Object { $_.deviceCode } | Where-Object { $_ })
-    if($deviceCodes.Count -gt 0){
-        $driverJob=Start-Job -Name 'api-stress-driver' -ArgumentList $driverScript,$out,$deviceCodes,$DurationMinutes,$CommandIntervalSec -ScriptBlock { param($scriptPath,$outDir,$codes,$minutes,$interval) & $scriptPath -DeviceCodes $codes -DurationMinutes $minutes -CommandIntervalSec $interval -OutputDir $outDir }
-        $waitStart=Get-Date
-        while(-not (Test-Path -LiteralPath $deviceFile) -and ((Get-Date)-$waitStart).TotalSeconds -lt 120){ Start-Sleep -Seconds 2 }
-        $faultDevices=@()
-        if(Test-Path -LiteralPath $deviceFile){
-            $registered=@(Get-Content -Raw -LiteralPath $deviceFile | ConvertFrom-Json)
-            foreach($reg in $registered){ $map=@($provisioned|Where-Object deviceCode -eq $reg.deviceCode|Select-Object -First 1)[0]; $faultDevices += [pscustomobject]@{avd=if($map){$map.avd}else{$reg.deviceCode};serial=if($map){$map.serial}else{$null};deviceCode=$reg.deviceCode;deviceId=$reg.deviceId} }
-            $runningSerials=@($running|ForEach-Object{$_.serial})
-            $fault
+    $metr
