@@ -278,7 +278,7 @@ function Start-MetricsJob {
     }
 }
 
-# ── Environment ──────────────────────────────────────────────────────────────
+# ── Environment ───────────────────────────────────────────────────────────────
 $script:sdkRoot     = Get-SdkRootPath
 $script:adbExe      = Join-Path $sdkRoot 'platform-tools\adb.exe'
 $script:emulatorExe = Join-Path $sdkRoot 'emulator\emulator.exe'
@@ -288,54 +288,58 @@ $script:sdkManager  = Join-Path $sdkRoot 'cmdline-tools\latest\bin\sdkmanager.ba
 # Ensure ADB is healthy at startup
 Ensure-AdbServer
 
-$cpu    = Get-CimInstance Win32_Processor      | Select-Object -First 1 -Property Name,NumberOfCores,NumberOfLogicalProcessors
-$mem    = Get-CimInstance Win32_ComputerSystem | Select-Object -First 1 -Property TotalPhysicalMemory
-$osRaw  = Get-CimInstance Win32_OperatingSystem
-$os     = $osRaw | Select-Object -First 1 -Property Caption,Version,OSArchitecture
+$cpu   = Get-CimInstance Win32_Processor      | Select-Object -First 1 -Property Name,NumberOfCores,NumberOfLogicalProcessors
+$mem   = Get-CimInstance Win32_ComputerSystem | Select-Object -First 1 -Property TotalPhysicalMemory
+$osRaw = Get-CimInstance Win32_OperatingSystem
+$os    = $osRaw | Select-Object -First 1 -Property Caption,Version,OSArchitecture
 
-$freeRamStartMB      = [math]::Round($osRaw.FreePhysicalMemory / 1024)
-$safeFreeMB          = 4000
-$availableForAvds    = $freeRamStartMB - $safeFreeMB
-$memoryConcurrentMax = [math]::Min(7,[math]::Max(0,[math]::Floor($availableForAvds / $AvdRamMB)))
+$freeRamStartMB         = [math]::Round($osRaw.FreePhysicalMemory / 1024)
+$safeFreeMB             = 4000
+$availableForAvds       = $freeRamStartMB - $safeFreeMB
+$memoryConcurrentMax    = [math]::Min(7,[math]::Max(0,[math]::Floor($availableForAvds / $AvdRamMB)))
 $effectiveConcurrentMax = [math]::Min($ConcurrentMax,$memoryConcurrentMax)
-$initialMemorySafe   = $effectiveConcurrentMax -ge 3
+$initialMemorySafe      = $effectiveConcurrentMax -ge 3
 
 $memoryBudget = [pscustomobject]@{
-    totalRamGB            = [math]::Round($mem.TotalPhysicalMemory/1GB,1)
-    freeRamStartMB        = $freeRamStartMB
-    avdRamMB              = $AvdRamMB
-    safeFreeMB            = $safeFreeMB
-    availableForAvdsMB    = $availableForAvds
-    memoryConcurrentMax   = $memoryConcurrentMax
-    requestedConcurrentMax= $ConcurrentMax
-    effectiveConcurrentMax= $effectiveConcurrentMax
-    initialMemorySafe     = $initialMemorySafe
-    recommendation        = 'Close IntelliJ IDEA, Android Studio, and heavy browsers if free RAM is low.'
+    totalRamGB             = [math]::Round($mem.TotalPhysicalMemory/1GB,1)
+    freeRamStartMB         = $freeRamStartMB
+    avdRamMB               = $AvdRamMB
+    safeFreeMB             = $safeFreeMB
+    availableForAvdsMB     = $availableForAvds
+    memoryConcurrentMax    = $memoryConcurrentMax
+    requestedConcurrentMax = $ConcurrentMax
+    effectiveConcurrentMax = $effectiveConcurrentMax
+    initialMemorySafe      = $initialMemorySafe
+    recommendation         = 'Close IntelliJ IDEA, Android Studio, and heavy browsers if free RAM is low.'
 }
 
 Add-MemoryWatchdogRecord -Phase 'environment_start' -FreeMB $freeRamStartMB -Safe $initialMemorySafe -Note "effectiveConcurrentMax=$effectiveConcurrentMax; avdRamMB=$AvdRamMB"
 
 $health       = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 10 -UseBasicParsing
 $existingAvds = @(Get-ChildItem "$env:USERPROFILE\.android\avd" -Filter '*.ini' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName })
-$batchStrategy = if($effectiveConcurrentMax -ge 5){"lightweight rolling batch, max $effectiveConcurrentMax concurrent AVDs"}
-                 elseif($effectiveConcurrentMax -ge 3){"lightweight fallback, max $effectiveConcurrentMax concurrent AVDs due free RAM"}
-                 else{'blocked: free RAM below minimum for 3 AVDs'}
+$batchStrategy = if ($effectiveConcurrentMax -ge 5) {
+    "lightweight rolling batch, max $effectiveConcurrentMax concurrent AVDs"
+} elseif ($effectiveConcurrentMax -ge 3) {
+    "lightweight fallback, max $effectiveConcurrentMax concurrent AVDs due free RAM"
+} else {
+    'blocked: free RAM below minimum for 3 AVDs'
+}
 
 [pscustomobject]@{
-    generatedAt          = (Get-Date -Format o)
-    cpu                  = $cpu
-    memory               = $mem
-    os                   = $os
-    backendHealthStatus  = $health.StatusCode
-    sdkRoot              = $sdkRoot
-    adbVersion           = (& $script:adbExe version | Select-Object -First 2)
-    emulatorVersion      = (& $script:emulatorExe -version 2>&1 | Select-Object -First 1)
-    existingAvds         = $existingAvds
-    requestedDevices     = $DeviceCount
+    generatedAt            = (Get-Date -Format o)
+    cpu                    = $cpu
+    memory                 = $mem
+    os                     = $os
+    backendHealthStatus    = $health.StatusCode
+    sdkRoot                = $sdkRoot
+    adbVersion             = (& $script:adbExe version | Select-Object -First 2)
+    emulatorVersion        = (& $script:emulatorExe -version 2>&1 | Select-Object -First 1)
+    existingAvds           = $existingAvds
+    requestedDevices       = $DeviceCount
     requestedConcurrentMax = $ConcurrentMax
-    avdRamConfigMB       = $AvdRamMB
-    memoryBudget         = $memoryBudget
-    batchStrategy        = $batchStrategy
+    avdRamConfigMB         = $AvdRamMB
+    memoryBudget           = $memoryBudget
+    batchStrategy          = $batchStrategy
 } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $out 'environment.json') -Encoding UTF8
 
 Add-TimelineEvent -Event 'environment' -Status 'OK' -Note $batchStrategy
@@ -406,6 +410,4 @@ $concurrentActual = $running.Count
 $stressDevices = $provisioned | Select-Object avd,serial,deviceCode
 $stressDevices | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'avd-device-map.json') -Encoding UTF8
 
-$deviceFile = Join-Path $out 'stress-devices.json'
-
-if($provisioned.Count -
+$deviceFile = Join-Path
