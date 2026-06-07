@@ -21,4 +21,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "MDM Application"
 include(":app")
+include(":benchmark")
  

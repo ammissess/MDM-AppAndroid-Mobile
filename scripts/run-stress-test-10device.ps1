@@ -70,7 +70,7 @@ function Ensure-AdbServer {
     # Check if ADB server is responsive; restart it if not.
     $test = & $script:adbExe devices 2>&1
     if ($LASTEXITCODE -ne 0 -or ($test -join '') -match 'error|cannot connect|failed to start') {
-        Write-Warning "ADB server unresponsive — restarting..."
+        Write-Warning "ADB server unresponsive - restarting..."
         & $script:adbExe kill-server 2>&1 | Out-Null
         Start-Sleep -Seconds 3
         & $script:adbExe start-server 2>&1 | Out-Null
@@ -134,7 +134,7 @@ function Wait-ForBootStress {
         # Ensure ADB is alive before each poll
         $adbCheck = & $script:adbExe devices 2>&1
         if (($adbCheck -join '') -match 'error|cannot connect') {
-            Write-Warning "ADB lost during boot wait for $Serial — restarting ADB..."
+            Write-Warning "ADB lost during boot wait for $Serial - restarting ADB..."
             & $script:adbExe kill-server 2>&1 | Out-Null
             Start-Sleep -Seconds 3
             & $script:adbExe start-server 2>&1 | Out-Null
@@ -185,7 +185,8 @@ function Start-ProvisionStressAvd {
     Ensure-AdbServer
 
     Add-TimelineEvent -Event 'boot_start' -Avd $AvdName -Serial $serial
-    $emulatorArgs=@('-avd',$AvdName,'-port',"$Port",'-memory',"$RamMB",'-no-window','-no-audio','-no-snapshot-save','-no-snapshot-load','-no-boot-anim','-gpu','guest','-partition-size','2048','-wipe-data')
+    Write-Host "[BOOT] $AvdName on port $Port (RAM=${RamMB}MB)..."
+    $emulatorArgs=@('-avd',$AvdName,'-port',"$Port",'-memory',"$RamMB",'-no-window','-no-audio','-no-snapshot-save','-no-snapshot-load','-no-boot-anim','-partition-size','2047','-wipe-data')
     $proc=Start-Process -FilePath $script:emulatorExe -ArgumentList $emulatorArgs -WindowStyle Hidden -PassThru
 
     if(-not (Wait-ForBootStress -Serial $serial -TimeoutSec 180)){
@@ -196,7 +197,8 @@ function Start-ProvisionStressAvd {
         # Restart ADB before retry to recover from disconnection
         Ensure-AdbServer
 
-        $retryArgs=@('-avd',$AvdName,'-port',"$Port",'-memory',"$RamMB",'-no-window','-no-audio','-no-snapshot-save','-no-snapshot-load','-no-boot-anim','-gpu','swiftshader_indirect','-partition-size','2048','-wipe-data')
+        Write-Host "[RETRY] $AvdName with swiftshader_indirect..."
+        $retryArgs=@('-avd',$AvdName,'-port',"$Port",'-memory',"$RamMB",'-no-window','-no-audio','-no-snapshot-save','-no-snapshot-load','-no-boot-anim','-gpu','swiftshader_indirect','-partition-size','2047','-wipe-data')
         $proc=Start-Process -FilePath $script:emulatorExe -ArgumentList $retryArgs -WindowStyle Hidden -PassThru
         if(-not (Wait-ForBootStress -Serial $serial -TimeoutSec 180)){
             Add-TimelineEvent -Event 'boot' -Avd $AvdName -Serial $serial -Status 'BOOT_FAILED'
@@ -356,8 +358,18 @@ $apkPath = (Get-Item 'app\build\outputs\apk\debug\app-debug.apk').FullName
 
 # ── SDK image ─────────────────────────────────────────────────────────────────
 $systemImage = "system-images;android-$Api;google_apis;x86_64"
-if(Test-Path -LiteralPath $script:sdkManager){
-    & $script:sdkManager --install $systemImage | Out-File (Join-Path $out 'sdkmanager.log')
+$imageDir = Join-Path $sdkRoot "system-images\android-$Api\google_apis\x86_64"
+if(Test-Path -LiteralPath (Join-Path $imageDir 'system.img')){
+    Write-Host "System image already installed at $imageDir - skipping download."
+} elseif(Test-Path -LiteralPath $script:sdkManager){
+    Write-Host "Installing system image..."
+    $sdkProc = Start-Process -FilePath $script:sdkManager -ArgumentList "--install `"$systemImage`"" -NoNewWindow -PassThru -RedirectStandardInput "NUL"
+    if(-not $sdkProc.WaitForExit(300000)){ # 5 min timeout
+        Write-Warning "sdkmanager timed out after 5 minutes - killing."
+        try { $sdkProc.Kill() } catch {}
+    }
+} else {
+    Write-Warning "sdkmanager not found and system image not present. AVD creation may fail."
 }
 
 # ── AVD names ─────────────────────────────────────────────────────────────────
@@ -408,6 +420,67 @@ $concurrentActual = $running.Count
 
 # ── Save device map ───────────────────────────────────────────────────────────
 $stressDevices = $provisioned | Select-Object avd,serial,deviceCode
-$stressDevices | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'avd-device-map.json') -Encoding UTF8
+$deviceFile = Join-Path $out 'stress-devices.json'
+$stressDevices | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deviceFile -Encoding UTF8
 
-$deviceFile = Join
+# Gate the next phase on every active emulator reporting a completed boot.
+# This avoids racing ADB immediately after provisioning/rolling restarts.
+$bootReady = @{}
+foreach ($rec in $running) {
+    if ($rec.serial) { $bootReady[$rec.serial] = $false }
+}
+$bootGateDeadline = (Get-Date).AddMinutes(5)
+while (($bootReady.Values -contains $false) -and (Get-Date) -lt $bootGateDeadline) {
+    foreach ($serial in @($bootReady.Keys)) {
+        if ($bootReady[$serial]) { continue }
+        $bootLine = (& $script:adbExe -s $serial shell getprop sys.boot_completed 2>$null | Select-Object -First 1)
+        $boot = if ($null -ne $bootLine) { $bootLine.ToString().Trim() } else { '' }
+        if ($boot -eq '1') {
+            $bootReady[$serial] = $true
+            Add-TimelineEvent -Event 'boot_gate_ready' -Serial $serial -Status 'OK'
+        } else {
+            Write-Host "Waiting for $serial sys.boot_completed=1 (current='$boot')..."
+        }
+    }
+    if ($bootReady.Values -contains $false) { Start-Sleep -Seconds 5 }
+}
+if ($bootReady.Values -contains $false) {
+    $pending = @($bootReady.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key }) -join ', '
+    Add-TimelineEvent -Event 'boot_gate' -Status 'FAILED' -Note "pending=$pending"
+    throw "BOOT_GATE_TIMEOUT: sys.boot_completed was not 1 for: $pending"
+}
+Add-TimelineEvent -Event 'boot_gate' -Status 'OK' -Note "serials=$($bootReady.Count)"
+
+$onlineDeviceFile = Join-Path $out 'stress-devices-online.json'
+$running | Select-Object avd,serial,deviceCode | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $onlineDeviceFile -Encoding UTF8
+
+Write-Host "`n======================================================="
+Write-Host "🚀 STARTING STRESS DRIVER & FAULT INJECTION"
+Write-Host "======================================================="
+
+# Run API Stress Driver in Background
+Write-Host "Stress driver targeting $($stressDevices.Count) devices (running in background)..."
+$driverJob = Start-Job -ScriptBlock {
+    param($scriptPath, $backendUrl, $df, $duration, $interval, $outDir)
+    & $scriptPath -BackendUrl $backendUrl -DeviceFile $df -DurationMinutes $duration -CommandIntervalSec $interval -OutputDir $outDir
+} -ArgumentList "$PSScriptRoot\run-api-stress-driver.ps1", 'http://127.0.0.1:8080', $deviceFile, $DurationMinutes, $CommandIntervalSec, $out
+
+# Wait a few seconds to let driver spin up
+Start-Sleep -Seconds 10
+
+# Run Fault Injection concurrently
+Write-Host "Starting fault injection..."
+& .\scripts\run-fault-injection.ps1 -BackendUrl 'http://127.0.0.1:8080' -DeviceFile $onlineDeviceFile -OutputDir $out
+
+# Wait for Stress Driver to finish its duration
+Write-Host "Waiting for API stress driver to complete its $DurationMinutes minute run..."
+Wait-Job -Job $driverJob | Out-Null
+Receive-Job -Job $driverJob
+Remove-Job -Job $driverJob -Force
+
+Write-Host "`n======================================================="
+Write-Host "🛑 TEST COMPLETE - TEARDOWN"
+Write-Host "======================================================="
+
+$running | ForEach-Object { Stop-EmulatorRecord -Record $_ -Reason 'test complete' }
+Write-Host "All devices stopped. Output saved to: $out"

@@ -28,6 +28,7 @@ ticket9-android-harness.log
 .gradle-user-home/
 .kotlin/errors/
 runtime-evidence/
+benchmark-results/
 runtime-proof.log
 analytics.settings
 query
@@ -42,3 +43,4 @@ ticket4_runtime_verify.bat
 ticket4_runtime_verify.ps1
 ticket4_verify_wrapper.ps1
 scripts/provision-emulator-device-owner.ps1
+.aider*
